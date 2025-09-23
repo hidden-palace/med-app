@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -11,13 +11,14 @@ import {
   Clock, 
   BookOpen, 
   CheckCircle,
-  PlayCircle
+  PlayCircle,
+  Loader2
 } from 'lucide-react';
 import { getCourses, getCourseModules, getAllModules, getUserProgress } from '@/lib/database';
 import type { Course, Module, UserProgress } from '@/lib/supabase';
 
 // Add debug logging
-const DEBUG = true;
+const DEBUG = false;
 
 function debugLog(message: string, data?: any) {
   if (DEBUG) {
@@ -38,6 +39,8 @@ export function CourseList({ selectedCourse, onCourseSelect, onModuleSelect, use
   const [allAvailableModules, setAllAvailableModules] = useState<Module[]>([]);
   const [userProgress, setUserProgress] = useState<UserProgress[]>([]);
   const [loading, setLoading] = useState(true);
+  const [modulesLoading, setModulesLoading] = useState(false);
+  const modulesCacheRef = useRef<Record<string, Module[]>>({});
   
   const loadCourses = useCallback(async () => {
     debugLog('Starting to load courses...');
@@ -52,6 +55,11 @@ export function CourseList({ selectedCourse, onCourseSelect, onModuleSelect, use
         progressCount: progressData.length,
         modulesCount: allModulesData.length
       });
+      const groupedModules = allModulesData.reduce((acc, module) => {
+        acc[module.course_id] = acc[module.course_id] ? [...acc[module.course_id], module] : [module];
+        return acc;
+      }, {} as Record<string, Module[]>);
+      modulesCacheRef.current = { ...modulesCacheRef.current, ...groupedModules };
       setCourses(coursesData);
       setUserProgress(progressData);
       setAllAvailableModules(allModulesData);
@@ -73,14 +81,27 @@ export function CourseList({ selectedCourse, onCourseSelect, onModuleSelect, use
   const loadCourseModules = useCallback(async (courseId: string) => {
     debugLog('Loading modules for course:', courseId);
     try {
+      const cachedModules = modulesCacheRef.current[courseId];
+      if (cachedModules) {
+        debugLog('Using cached modules', { courseId, modulesCount: cachedModules.length });
+        setModules(cachedModules);
+        setModulesLoading(false);
+        return;
+      }
+
       debugLog('About to call getCourseModules with courseId:', courseId);
+      setModules([]);
+      setModulesLoading(true);
       // Fetch published modules directly for the selected course
       const modulesData = await getCourseModules(courseId);
       debugLog('Loaded modules:', { courseId, modulesCount: modulesData.length });
       debugLog('Module details:', modulesData);
+      modulesCacheRef.current[courseId] = modulesData;
       setModules(modulesData);
     } catch (error) {
       debugLog('Error loading modules:', error);
+    } finally {
+      setModulesLoading(false);
     }
   }, []);
 
@@ -89,8 +110,24 @@ export function CourseList({ selectedCourse, onCourseSelect, onModuleSelect, use
   }, [loadCourses]);
 
   useEffect(() => {
+    if (!allAvailableModules.length) {
+      return;
+    }
+    const grouped = allAvailableModules.reduce((acc, module) => {
+      acc[module.course_id] = acc[module.course_id]
+        ? [...acc[module.course_id], module]
+        : [module];
+      return acc;
+    }, {} as Record<string, Module[]>);
+    modulesCacheRef.current = { ...modulesCacheRef.current, ...grouped };
+  }, [allAvailableModules]);
+
+  useEffect(() => {
     if (selectedCourse) {
       loadCourseModules(selectedCourse.id);
+    } else {
+      setModules([]);
+      setModulesLoading(false);
     }
   }, [loadCourseModules, selectedCourse]);
   
@@ -170,48 +207,58 @@ export function CourseList({ selectedCourse, onCourseSelect, onModuleSelect, use
 
         <div className="space-y-4">
           <h3 className="text-lg font-semibold">Modules</h3>
-          <div className="grid gap-4">
-            {modules.map((module, index) => {
-              const completed = isModuleCompleted(module.id);
-              return (
-                <Card key={module.id} className="hover:shadow-md transition-shadow">
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-start space-x-4 flex-1">
-                      <div className="flex items-center justify-center w-10 h-10 bg-blue-50 rounded-lg">
-                        {completed ? (
-                          <CheckCircle className="w-5 h-5 text-green-600" />
-                        ) : (
-                          <PlayCircle className="w-5 h-5 text-blue-600" />
-                        )}
-                      </div>
-                      
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center space-x-2 mb-1">
-                          <h4 className="font-medium text-gray-900">{module.title}</h4>
-                          {completed && <Badge variant="secondary">Completed</Badge>}
+          {modulesLoading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+            </div>
+          ) : modules.length > 0 ? (
+            <div className="grid gap-4">
+              {modules.map((module, index) => {
+                const completed = isModuleCompleted(module.id);
+                return (
+                  <Card key={module.id} className="hover:shadow-md transition-shadow">
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-start space-x-4 flex-1">
+                          <div className="flex items-center justify-center w-10 h-10 bg-blue-50 rounded-lg">
+                            {completed ? (
+                              <CheckCircle className="w-5 h-5 text-green-600" />
+                            ) : (
+                              <PlayCircle className="w-5 h-5 text-blue-600" />
+                            )}
+                          </div>
+
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center space-x-2 mb-1">
+                              <h4 className="font-medium text-gray-900">{module.title}</h4>
+                              {completed && <Badge variant="secondary">Completed</Badge>}
+                            </div>
+                            <p className="text-sm text-gray-600 mb-2">{module.description}</p>
+                            <div className="flex items-center space-x-4 text-xs text-gray-500">
+                              <span>Module {index + 1}</span>
+                              <span>{module.duration}</span>
+                            </div>
+                          </div>
                         </div>
-                        <p className="text-sm text-gray-600 mb-2">{module.description}</p>
-                        <div className="flex items-center space-x-4 text-xs text-gray-500">
-                          <span>Module {index + 1}</span>
-                          <span>{module.duration}</span>
-                        </div>
+
+                        <Button
+                          onClick={() => onModuleSelect(module)}
+                          variant={completed ? 'outline' : 'default'}
+                        >
+                          <Play className="w-4 h-4 mr-2" />
+                          {completed ? 'Review' : 'Start'}
+                        </Button>
                       </div>
-                    </div>
-                    
-                    <Button 
-                      onClick={() => onModuleSelect(module)}
-                      variant={completed ? "outline" : "default"}
-                    >
-                      <Play className="w-4 h-4 mr-2" />
-                      {completed ? 'Review' : 'Start'}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-              );
-            })}
-          </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed border-gray-200 p-6 text-center text-sm text-gray-500">
+              No modules available for this course yet.
+            </div>
+          )}
         </div>
       </div>
     );

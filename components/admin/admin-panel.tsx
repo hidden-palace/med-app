@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CourseManagement } from './course-management';
@@ -28,14 +28,10 @@ export function AdminPanel({ userId }: AdminPanelProps) {
   });
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadAdminStats();
-  }, []);
-
-  const loadAdminStats = async () => {
+  const loadAdminStats = useCallback(async () => {
     try {
       setLoading(true);
-      
+
       // Load all data in parallel
       const [coursesData, usersData, validationsData] = await Promise.all([
         getAllCourses(),
@@ -56,13 +52,17 @@ export function AdminPanel({ userId }: AdminPanelProps) {
         activeSessions
       });
     } catch (error) {
-      const errorString = err instanceof Error ? err.message : String(err);
+      const errorString = error instanceof Error ? error.message : String(error);
       console.error('Error loading admin stats:', errorString);
       // Keep default values on error
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadAdminStats();
+  }, [loadAdminStats]);
 
   const adminStats = [
     {

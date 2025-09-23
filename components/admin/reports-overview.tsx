@@ -66,16 +66,16 @@ export function ReportsOverview({ onStatsChange }: ReportsOverviewProps) {
     }
   }, [error]);
 
-  const loadValidations = useCallback(async () => {
+  const loadValidations = useCallback(async (shouldNotify = false) => {
     try {
       setLoading(true);
       setError(null);
       const data = await getAllValidationHistory(50);
       setValidations(data);
       setSuccess('Validation reports loaded successfully');
-      
+
       // Notify parent component about stats change
-      if (onStatsChange) {
+      if (shouldNotify && onStatsChange) {
         onStatsChange();
       }
     } catch (err) {
@@ -130,7 +130,7 @@ export function ReportsOverview({ onStatsChange }: ReportsOverviewProps) {
   }, [dateFilter, searchTerm, statusFilter, validations]);
 
   useEffect(() => {
-    loadValidations();
+    loadValidations(false);
   }, [loadValidations]);
 
   useEffect(() => {
@@ -212,6 +212,9 @@ ${new Date().toLocaleString()}
       // Remove from local state
       setValidations(validations.filter(v => v.id !== validationId));
       setSuccess('Validation report deleted successfully');
+      if (onStatsChange) {
+        onStatsChange();
+      }
     } catch (err) {
       console.error('Error deleting validation:', err);
       setError('Failed to delete validation report.');
@@ -226,12 +229,15 @@ ${new Date().toLocaleString()}
       await archiveValidationRecord(validationId);
       
       // Update local state
-      setValidations(validations.map(v => 
-        v.id === validationId 
+      setValidations(validations.map(v =>
+        v.id === validationId
           ? { ...v, status: 'archived' as const }
           : v
       ));
       setSuccess('Validation report archived successfully');
+      if (onStatsChange) {
+        onStatsChange();
+      }
     } catch (err) {
       console.error('Error archiving validation:', err);
       setError('Failed to archive validation report.');
@@ -319,7 +325,7 @@ ${new Date().toLocaleString()}
           <p className="text-sm text-gray-600">View and manage all validation history</p>
         </div>
         
-        <Button onClick={loadValidations} variant="outline">
+        <Button onClick={() => loadValidations(true)} variant="outline">
           <RefreshCw className="w-4 h-4 mr-2" />
           Refresh
         </Button>
