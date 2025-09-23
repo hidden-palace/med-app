@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
 import { Dashboard } from '@/components/dashboard/dashboard';
@@ -20,6 +20,37 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loadingAdminCheck, setLoadingAdminCheck] = useState(false);
+  const lastAdminCheckUserIdRef = useRef<string | null>(null);
+  const adminCheckInFlightRef = useRef(false);
+
+  const checkAdminStatus = useCallback(async (userId: string, { force = false }: { force?: boolean } = {}) => {
+    if (!userId) {
+      return;
+    }
+
+    if (!force && lastAdminCheckUserIdRef.current === userId) {
+      return;
+    }
+
+    if (adminCheckInFlightRef.current) {
+      return;
+    }
+
+    adminCheckInFlightRef.current = true;
+    setLoadingAdminCheck(true);
+
+    try {
+      const adminStatus = await isUserAdmin(userId);
+      setIsAdmin(adminStatus);
+      lastAdminCheckUserIdRef.current = userId;
+    } catch (error) {
+      console.error('Error checking admin status:', error);
+      setIsAdmin(false);
+    } finally {
+      adminCheckInFlightRef.current = false;
+      setLoadingAdminCheck(false);
+    }
+  }, []);
 
   useEffect(() => {
     // Get initial session
@@ -28,10 +59,10 @@ export default function Home() {
         const { data: { session } } = await supabase.auth.getSession();
         const currentUser = session?.user ?? null;
         setUser(currentUser);
-        
+
         // Check admin status if user is authenticated
         if (currentUser) {
-          await checkAdminStatus(currentUser.id);
+          await checkAdminStatus(currentUser.id, { force: true });
         }
       } catch (error) {
         console.error('Error getting session:', error);
@@ -47,7 +78,7 @@ export default function Home() {
       async (event, session) => {
         const currentUser = session?.user ?? null;
         setUser(currentUser);
-        
+
         // Check admin status when user signs in
         if (currentUser && event === 'SIGNED_IN') {
           // Update last sign in time in profiles table, but don't block UI on it
@@ -57,30 +88,19 @@ export default function Home() {
             console.error('Error updating last sign in time:', error);
           });
 
-          await checkAdminStatus(currentUser.id);
+          await checkAdminStatus(currentUser.id, { force: true });
         } else if (event === 'SIGNED_OUT') {
           setIsAdmin(false);
+          lastAdminCheckUserIdRef.current = null;
+          adminCheckInFlightRef.current = false;
         }
-        
+
         setLoading(false);
       }
     );
 
     return () => subscription.unsubscribe();
-  }, []);
-  
-  const checkAdminStatus = async (userId: string) => {
-    try {
-      setLoadingAdminCheck(true);
-      const adminStatus = await isUserAdmin(userId);
-      setIsAdmin(adminStatus);
-    } catch (error) {
-      console.error('Error checking admin status:', error);
-      setIsAdmin(false);
-    } finally {
-      setLoadingAdminCheck(false);
-    }
-  };
+  }, [checkAdminStatus]);
 
   const handleNavigateToLearning = () => {
     setActiveView('learning');

@@ -360,30 +360,30 @@ export async function getProfiles() {
   }
 }
 
-export async function getUserProfile(userId: string) {
+export async function getUserProfile(userId: string): Promise<Profile | null> {
   try {
     console.log('Fetching user profile:', userId)
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', userId)
-      .single()
-    
+      .maybeSingle()
+
     console.log('User profile query result:', { data, error })
-    
+
     if (error) {
       console.error('Error fetching user profile:', error)
       throw error
     }
-    
-    return data as Profile
+
+    return (data as Profile) ?? null
   } catch (err) {
     console.error('getUserProfile failed:', err)
     throw err
   }
 }
 
-export async function updateProfile(id: string, updates: Partial<Profile>) {
+export async function updateProfile(id: string, updates: Partial<Profile>): Promise<Profile | null> {
   try {
     const payload = {
       id,
@@ -879,7 +879,7 @@ export async function getCourseById(courseId: string) {
 export async function isUserAdmin(userId: string): Promise<boolean> {
   try {
     const profile = await getUserProfile(userId)
-    return profile.role === 'admin'
+    return profile?.role === 'admin'
   } catch (error) {
     console.error('Error checking admin status:', error)
     return false
