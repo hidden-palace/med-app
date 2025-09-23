@@ -385,25 +385,28 @@ export async function getUserProfile(userId: string) {
 
 export async function updateProfile(id: string, updates: Partial<Profile>) {
   try {
-    console.log('Updating profile:', { id, updates })
+    const payload = {
+      id,
+      ...updates,
+      updated_at: new Date().toISOString(),
+    }
+
+    console.log('Updating profile:', payload)
+
     const { data, error } = await supabase
       .from('profiles')
-      .update({
-        ...updates,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', id)
+      .upsert(payload, { onConflict: 'id' })
       .select()
-      .single()
-    
+      .maybeSingle()
+
     console.log('Profile update result:', { data, error })
-    
+
     if (error) {
       console.error('Error updating profile:', error)
       throw error
     }
-    
-    return data as Profile
+
+    return (data as Profile) ?? null
   } catch (err) {
     console.error('updateProfile failed:', err)
     throw err

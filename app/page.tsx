@@ -50,15 +50,13 @@ export default function Home() {
         
         // Check admin status when user signs in
         if (currentUser && event === 'SIGNED_IN') {
-          // Update last sign in time in profiles table
-          try {
-            await updateProfile(currentUser.id, {
-              last_sign_in_at: new Date().toISOString()
-            });
-          } catch (error) {
+          // Update last sign in time in profiles table, but don't block UI on it
+          updateProfile(currentUser.id, {
+            last_sign_in_at: new Date().toISOString()
+          }).catch((error) => {
             console.error('Error updating last sign in time:', error);
-          }
-          
+          });
+
           await checkAdminStatus(currentUser.id);
         } else if (event === 'SIGNED_OUT') {
           setIsAdmin(false);
