@@ -386,16 +386,16 @@ export async function getUserProfile(userId: string): Promise<Profile | null> {
 export async function updateProfile(id: string, updates: Partial<Profile>): Promise<Profile | null> {
   try {
     const payload = {
-      id,
       ...updates,
       updated_at: new Date().toISOString(),
     }
 
-    console.log('Updating profile:', payload)
+    console.log('Updating profile:', { id, updates: payload })
 
     const { data, error } = await supabase
       .from('profiles')
-      .upsert(payload, { onConflict: 'id' })
+      .update(payload)
+      .eq('id', id)
       .select()
       .maybeSingle()
 
@@ -406,7 +406,22 @@ export async function updateProfile(id: string, updates: Partial<Profile>): Prom
       throw error
     }
 
-    return (data as Profile) ?? null
+    if (data) {
+      return data as Profile
+    }
+
+    const { data: fetched, error: fetchError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (fetchError) {
+      console.error('Error fetching profile after update:', fetchError)
+      throw fetchError
+    }
+
+    return (fetched as Profile) ?? null
   } catch (err) {
     console.error('updateProfile failed:', err)
     throw err
@@ -885,3 +900,4 @@ export async function isUserAdmin(userId: string): Promise<boolean> {
     return false
   }
 }
+
