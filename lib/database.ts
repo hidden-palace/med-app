@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import type { User as SupabaseAuthUser } from '@supabase/supabase-js'
 import type { Course, Module, UserProgress, ValidationHistory, RecentActivity, Profile } from './supabase'
 
 // Debug function to test database connection
@@ -372,6 +373,10 @@ export async function getUserProfile(userId: string): Promise<Profile | null> {
     console.log('User profile query result:', { data, error })
 
     if (error) {
+      if ((error as { code?: string }).code === 'PGRST116') {
+        return null
+      }
+
       console.error('Error fetching user profile:', error)
       throw error
     }
@@ -383,7 +388,18 @@ export async function getUserProfile(userId: string): Promise<Profile | null> {
   }
 }
 
-export async function updateProfile(id: string, updates: Partial<Profile>): Promise<Profile | null> {
+type UpdateProfileOptions = {
+  fallbackUser?: SupabaseAuthUser
+  createIfMissing?: boolean
+}
+
+export async function updateProfile(
+  id: string,
+  updates: Partial<Profile>,
+  options: UpdateProfileOptions = {}
+): Promise<Profile | null> {
+  const { fallbackUser, createIfMissing = true } = options
+
   try {
     const timestamp = new Date().toISOString()
     const updatePayload = {
@@ -393,72 +409,58 @@ export async function updateProfile(id: string, updates: Partial<Profile>): Prom
 
     console.log('Updating profile:', { id, updates: updatePayload })
 
-    const { data: existing, error: existingError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle()
-
-    if (existingError) {
-      console.error('Error fetching existing profile before update:', existingError)
-      throw existingError
-    }
-
-    if (!existing) {
-      const { data: authData, error: authError } = await supabase.auth.getUser()
-
-      if (authError) {
-        console.error('Error fetching auth user for profile insert:', authError)
-        throw authError
-      }
-
-      const authUser = authData?.user
-      const fallbackEmail = updatePayload.email ?? authUser?.email
-
-      if (!fallbackEmail) {
-        throw new Error('Cannot insert profile without email')
-      }
-
-      const insertPayload = {
-        id,
-        email: fallbackEmail,
-        full_name: updatePayload.full_name ?? (authUser?.user_metadata?.full_name ?? fallbackEmail),
-        is_active: updatePayload.is_active ?? true,
-        role: updatePayload.role ?? 'user',
-        last_sign_in_at: updatePayload.last_sign_in_at ?? null,
-        created_at: timestamp,
-        updated_at: timestamp,
-      }
-
-      console.log('Profile missing, inserting new record:', insertPayload)
-
-      const { data: inserted, error: insertError } = await supabase
-        .from('profiles')
-        .insert(insertPayload)
-        .select()
-        .maybeSingle()
-
-      if (insertError) {
-        console.error('Error inserting profile:', insertError)
-        throw insertError
-      }
-
-      return (inserted as Profile) ?? null
-    }
-
-    const { data, error } = await supabase
+    const { data: updatedProfile, error: updateError } = await supabase
       .from('profiles')
       .update(updatePayload)
       .eq('id', id)
       .select()
       .maybeSingle()
 
-    if (error) {
-      console.error('Error updating profile:', error)
-      throw error
+    if (!updateError && updatedProfile) {
+      return updatedProfile as Profile
     }
 
-    return (data as Profile) ?? null
+    if (updateError && !['PGRST116', 'PGRST204', 'PGRST108'].includes(updateError.code ?? '')) {
+      console.error('Error updating profile:', updateError)
+      throw updateError
+    }
+
+    if (!createIfMissing) {
+      return null
+    }
+
+    const fallbackEmail = updatePayload.email ?? fallbackUser?.email
+
+    if (!fallbackEmail) {
+      throw new Error('Cannot insert profile without email')
+    }
+
+    const insertPayload = {
+      id,
+      email: fallbackEmail,
+      full_name:
+        updatePayload.full_name ?? fallbackUser?.user_metadata?.full_name ?? fallbackEmail,
+      is_active: updatePayload.is_active ?? true,
+      role: updatePayload.role ?? 'user',
+      last_sign_in_at: updatePayload.last_sign_in_at ?? null,
+      created_at: timestamp,
+      updated_at: timestamp,
+    }
+
+    console.log('Profile missing, inserting new record:', insertPayload)
+
+    const { data: insertedProfile, error: insertError } = await supabase
+      .from('profiles')
+      .insert(insertPayload)
+      .select()
+      .maybeSingle()
+
+    if (insertError) {
+      console.error('Error inserting profile:', insertError)
+      throw insertError
+    }
+
+    return (insertedProfile as Profile) ?? null
   } catch (err) {
     console.error('updateProfile failed:', err)
     throw err
@@ -937,5 +939,19 @@ export async function isUserAdmin(userId: string): Promise<boolean> {
     return false
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

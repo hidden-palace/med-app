@@ -10,105 +10,162 @@ import { AdminPanel } from '@/components/admin/admin-panel';
 import { AuthForm } from '@/components/auth/auth-form';
 import { supabase } from '@/lib/supabase';
 import { isUserAdmin, updateProfile } from '@/lib/database';
-import type { User } from '@supabase/supabase-js';
+import type { User, AuthChangeEvent } from '@supabase/supabase-js';
 
 type ActiveView = 'dashboard' | 'learning' | 'validator' | 'admin';
 
 export default function Home() {
   const [activeView, setActiveView] = useState<ActiveView>('dashboard');
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [loadingAdminCheck, setLoadingAdminCheck] = useState(false);
+
   const lastAdminCheckUserIdRef = useRef<string | null>(null);
-  const adminCheckInFlightRef = useRef(false);
-
-  const checkAdminStatus = useCallback(async (userId: string, { force = false }: { force?: boolean } = {}) => {
-    if (!userId) {
-      return;
-    }
-
-    if (!force && lastAdminCheckUserIdRef.current === userId) {
-      return;
-    }
-
-    if (adminCheckInFlightRef.current) {
-      return;
-    }
-
-    adminCheckInFlightRef.current = true;
-    setLoadingAdminCheck(true);
-
-    try {
-      const adminStatus = await isUserAdmin(userId);
-      setIsAdmin(adminStatus);
-      lastAdminCheckUserIdRef.current = userId;
-    } catch (error) {
-      console.error('Error checking admin status:', error);
-      setIsAdmin(false);
-    } finally {
-      adminCheckInFlightRef.current = false;
-      setLoadingAdminCheck(false);
-    }
-  }, []);
+  const adminCheckPromiseRef = useRef<Promise<boolean> | null>(null);
+  const adminStatusRef = useRef(false);
 
   useEffect(() => {
-    // Get initial session
-    const getInitialSession = async () => {
+    adminStatusRef.current = isAdmin;
+  }, [isAdmin]);
+
+  const checkAdminStatus = useCallback(
+    async (
+      userId: string | null | undefined,
+      options: { force?: boolean } = {}
+    ): Promise<boolean> => {
+      const { force = false } = options;
+
+      if (!userId) {
+        setIsAdmin(false);
+        adminStatusRef.current = false;
+        lastAdminCheckUserIdRef.current = null;
+        return false;
+      }
+
+      if (!force && lastAdminCheckUserIdRef.current === userId && !adminCheckPromiseRef.current) {
+        return adminStatusRef.current;
+      }
+
+      if (adminCheckPromiseRef.current) {
+        return adminCheckPromiseRef.current;
+      }
+
+      const promise = (async () => {
+        try {
+          const adminStatus = await isUserAdmin(userId);
+          setIsAdmin(adminStatus);
+          adminStatusRef.current = adminStatus;
+          lastAdminCheckUserIdRef.current = userId;
+          return adminStatus;
+        } catch (error) {
+          console.error('Error checking admin status:', error);
+          setIsAdmin(false);
+          adminStatusRef.current = false;
+          lastAdminCheckUserIdRef.current = userId;
+          return false;
+        } finally {
+          adminCheckPromiseRef.current = null;
+        }
+      })();
+
+      adminCheckPromiseRef.current = promise;
+      return promise;
+    },
+    []
+  );
+
+  useEffect(() => {
+    let isActive = true;
+
+    const initializeAuth = async () => {
+      setIsLoading(true);
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!isActive) {
+          return;
+        }
+
         const currentUser = session?.user ?? null;
         setUser(currentUser);
 
-        // Check admin status if user is authenticated
         if (currentUser) {
-          await checkAdminStatus(currentUser.id, { force: true });
+          void checkAdminStatus(currentUser.id, { force: true });
+        } else {
+          setIsAdmin(false);
+          adminStatusRef.current = false;
+          lastAdminCheckUserIdRef.current = null;
         }
       } catch (error) {
-        console.error('Error getting session:', error);
+        console.error('Error initializing auth:', error);
+        if (isActive) {
+          setUser(null);
+          setIsAdmin(false);
+          adminStatusRef.current = false;
+          lastAdminCheckUserIdRef.current = null;
+        }
       } finally {
-        setLoading(false);
+        if (isActive) {
+          setIsLoading(false);
+        }
       }
     };
 
-    getInitialSession();
+    initializeAuth();
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        const currentUser = session?.user ?? null;
-        setUser(currentUser);
+    const adminCheckEvents: AuthChangeEvent[] = ['SIGNED_IN', 'TOKEN_REFRESHED', 'USER_UPDATED'];
 
-        // Check admin status when user signs in
-        if (currentUser && event === 'SIGNED_IN') {
-          // Update last sign in time in profiles table, but don't block UI on it
-          updateProfile(currentUser.id, {
-            last_sign_in_at: new Date().toISOString()
-          }).catch((error) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isActive) {
+        return;
+      }
+
+      const currentUser = session?.user ?? null;
+      setUser(currentUser);
+
+      if (currentUser && adminCheckEvents.includes(event)) {
+        if (event === 'SIGNED_IN') {
+          updateProfile(
+            currentUser.id,
+            {
+              last_sign_in_at: new Date().toISOString(),
+            },
+            { fallbackUser: currentUser }
+          ).catch((error) => {
             console.error('Error updating last sign in time:', error);
           });
-
-          await checkAdminStatus(currentUser.id, { force: true });
-        } else if (event === 'SIGNED_OUT') {
-          setIsAdmin(false);
-          lastAdminCheckUserIdRef.current = null;
-          adminCheckInFlightRef.current = false;
         }
 
-        setLoading(false);
+        const shouldForceCheck = event === 'SIGNED_IN' || event === 'USER_UPDATED';
+        await checkAdminStatus(currentUser.id, { force: shouldForceCheck });
       }
-    );
 
-    return () => subscription.unsubscribe();
+      if (event === 'SIGNED_OUT') {
+        setIsAdmin(false);
+        adminStatusRef.current = false;
+        lastAdminCheckUserIdRef.current = null;
+        adminCheckPromiseRef.current = null;
+      }
+    });
+
+    return () => {
+      isActive = false;
+      subscription.unsubscribe();
+      adminCheckPromiseRef.current = null;
+    };
   }, [checkAdminStatus]);
 
   const handleNavigateToLearning = () => {
     setActiveView('learning');
   };
-  
+
   const renderActiveView = () => {
     const userId = user?.id || null;
-    
+
     switch (activeView) {
       case 'dashboard':
         return <Dashboard userId={userId} onNavigateToLearning={handleNavigateToLearning} />;
@@ -117,7 +174,6 @@ export default function Home() {
       case 'validator':
         return <NoteValidator userId={userId} />;
       case 'admin':
-        // Check if user is admin before rendering admin panel
         if (!isAdmin) {
           return (
             <div className="flex items-center justify-center h-64">
@@ -140,38 +196,27 @@ export default function Home() {
     }
   };
 
-  // Show loading spinner while determining auth state
-  if (loading || loadingAdminCheck) {
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">
-            {loading ? 'Loading...' : 'Checking permissions...'}
-          </p>
+          <p className="mt-4 text-gray-600">Loading...</p>
         </div>
       </div>
     );
   }
 
-  // Show auth form if user is not authenticated
   if (!user) {
     return <AuthForm />;
   }
 
-  // Show main application if user is authenticated
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
-      <Sidebar 
-        activeView={activeView} 
-        onViewChange={setActiveView}
-        isAdmin={isAdmin}
-      />
+      <Sidebar activeView={activeView} onViewChange={setActiveView} isAdmin={isAdmin} />
       <div className="flex-1 flex flex-col min-w-0">
         <Header activeView={activeView} user={user} />
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6">
-          {renderActiveView()}
-        </main>
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6">{renderActiveView()}</main>
       </div>
     </div>
   );

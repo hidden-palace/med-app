@@ -4,10 +4,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { NoteUpload } from './note-upload';
 import { ValidationResults } from './validation-results';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { MapPin, FileCheck, Clock, AlertTriangle } from 'lucide-react';
-import { createValidationRecord, getValidationHistory, addRecentActivity, uploadValidationFile } from '@/lib/database';
+import { createValidationRecord, getValidationHistory, addRecentActivity, updateValidationResult, uploadValidationFile } from '@/lib/database';
 import { sendToN8N } from '@/lib/n8n-client';
 import { supabase } from '@/lib/supabase';
 import type { ValidationHistory } from '@/lib/supabase';
@@ -72,17 +73,23 @@ const STATE_TO_REGION: Record<string, string> = {
   'West Virginia': 'Northeast'
 };
 
+const N8N_PLACEHOLDER_URL = 'https://your-n8n-instance.com/webhook/validate-note';
+
 export function NoteValidator({ userId }: NoteValidatorProps) {
   const [selectedState, setSelectedState] = useState<string>('');
   const [validationResults, setValidationResults] = useState<ValidationHistory | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [recentValidations, setRecentValidations] = useState<ValidationHistory[]>([]);
-  
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const n8nWebhookUrl = process.env.NEXT_PUBLIC_N8N_WEBHOOK_URL;
+  const isValidationServiceConfigured =
+    !!n8nWebhookUrl && n8nWebhookUrl !== N8N_PLACEHOLDER_URL;
+
   const loadRecentValidations = useCallback(async () => {
     try {
-      // Skip loading if no authenticated user
       if (!userId) {
-        // Set mock data for demo
+        setErrorMessage(null);
         setRecentValidations([
           {
             id: '1',
@@ -103,8 +110,10 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
 
       const history = await getValidationHistory(userId, 5);
       setRecentValidations(history);
+      setErrorMessage(null);
     } catch (error) {
       console.error('Error loading validation history:', error);
+      setErrorMessage('Unable to load validation history.');
     }
   }, [userId]);
 
@@ -114,45 +123,37 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
 
   const handleFileUpload = async (file: File, textContent?: string) => {
     if (!selectedState) {
-      alert('Please select a state first');
+      setErrorMessage('Please select a state before uploading a note.');
       return;
     }
 
     if (!userId) {
-      alert('Demo mode: File validation is not available without authentication');
+      setErrorMessage('You need to sign in before validating notes.');
       return;
     }
 
+    setErrorMessage(null);
     setIsValidating(true);
-    console.log('Starting file upload process...', {
-      fileName: file.name,
-      fileType: file.type,
-      selectedState,
-      hasTextContent: !!textContent
-    });
-    
+
+    let validationRecord: ValidationHistory | null = null;
+
     try {
       const region = getRegionForState(selectedState);
-      
+
       let uploadedFileUrl: string | undefined;
       let content: string;
-      
-      // Handle file upload vs text content
+
       if (file && !textContent) {
-        // File was uploaded - upload to Supabase Storage first
         console.log('Uploading file to Supabase Storage...');
         uploadedFileUrl = await uploadValidationFile(userId, file, file.name);
         console.log('File uploaded successfully:', uploadedFileUrl);
         content = 'FILE_UPLOAD_URL_PROVIDED';
       } else {
-        // Text was pasted directly
         console.log('Using pasted text content');
         content = textContent || '';
       }
-      
-      // Create validation record in database
-      console.log('Creating validation record in database...');
-      const validationRecord = await createValidationRecord(
+
+      validationRecord = await createValidationRecord(
         userId,
         file.name,
         file.type,
@@ -161,8 +162,31 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
         uploadedFileUrl
       );
       console.log('Validation record created:', validationRecord.id);
-      
-      // Send to N8N for processing
+
+      if (!isValidationServiceConfigured) {
+        const failureSummary = 'Validation service is not configured.';
+
+        try {
+          const failedRecord = await updateValidationResult(
+            validationRecord.id,
+            'failed',
+            failureSummary,
+            { error: failureSummary }
+          );
+
+          if (failedRecord) {
+            setValidationResults(failedRecord);
+          }
+        } catch (updateError) {
+          console.error('Error marking validation as failed:', updateError);
+        }
+
+        setErrorMessage('Validation service is not configured. Please contact an administrator.');
+        setIsValidating(false);
+        await loadRecentValidations();
+        return;
+      }
+
       console.log('Sending to N8N for processing...');
       const n8nResponse = await sendToN8N({
         validationId: validationRecord.id,
@@ -175,8 +199,7 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
         fileUrl: uploadedFileUrl
       });
       console.log('N8N response received:', n8nResponse);
-      
-      // Add to recent activity
+
       console.log('Adding to recent activity...');
       await addRecentActivity(
         userId,
@@ -184,64 +207,78 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
         file.name,
         `Validation started for ${selectedState}`
       );
-      
-      // Poll for results (in real app, use webhooks)
+
       console.log('Starting polling for results...');
       pollForResults(validationRecord.id);
-      
     } catch (error) {
       console.error('Error starting validation:', error);
       setIsValidating(false);
-      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
-      alert(`Error starting validation: ${errorMessage}. Please check the console for more details.`);
+      const message = error instanceof Error ? error.message : 'An unknown error occurred.';
+
+      if (validationRecord) {
+        try {
+          const failedRecord = await updateValidationResult(
+            validationRecord.id,
+            'failed',
+            'Validation failed to start.',
+            { error: message }
+          );
+
+          if (failedRecord) {
+            setValidationResults(failedRecord);
+          }
+        } catch (updateError) {
+          console.error('Error marking validation as failed:', updateError);
+        }
+      }
+
+      setErrorMessage(`Error starting validation: ${message}`);
+      await loadRecentValidations();
     }
   };
-  
+
   const pollForResults = async (validationId: string) => {
-    const maxAttempts = 30; // Poll for up to 5 minutes (30 attempts * 10 seconds)
+    const maxAttempts = 30;
     let attempts = 0;
-    
+
     const poll = async () => {
       try {
         attempts++;
-        
-        // Fetch the validation record from Supabase
+
         const { data: validationRecord, error } = await supabase
           .from('validation_history')
           .select('*')
           .eq('id', validationId)
           .single();
-        
+
         if (error) {
           console.error('Error fetching validation record:', error);
           setIsValidating(false);
+          setErrorMessage('Unable to retrieve validation results.');
           return;
         }
-        
-        // Check if validation is complete
+
         if (validationRecord.status === 'completed' || validationRecord.status === 'failed') {
           setValidationResults(validationRecord);
           setIsValidating(false);
-          loadRecentValidations();
+          await loadRecentValidations();
           return;
         }
-        
-        // Continue polling if still processing and haven't exceeded max attempts
+
         if (validationRecord.status === 'processing' && attempts < maxAttempts) {
-          setTimeout(poll, 10000); // Poll every 10 seconds
+          setTimeout(poll, 10000);
         } else if (attempts >= maxAttempts) {
-          // Timeout - validation is taking too long
           console.warn('Validation polling timeout');
           setIsValidating(false);
+          setErrorMessage('Validation is taking longer than expected. Please try again later.');
         }
-        
       } catch (error) {
         console.error('Error polling for results:', error);
         setIsValidating(false);
+        setErrorMessage('Error while checking validation status.');
       }
     };
-    
-    // Start polling after a short delay
+
     setTimeout(poll, 5000);
   };
 
@@ -249,9 +286,15 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
     return STATE_TO_REGION[state] || 'Unknown';
   };
 
-
   return (
     <div className="space-y-6">
+      {errorMessage && (
+        <Alert variant="destructive">
+          <AlertTriangle className="w-4 h-4" />
+          <AlertDescription>{errorMessage}</AlertDescription>
+        </Alert>
+      )}
+
       {/* State Selection */}
       <Card>
         <CardHeader>
@@ -279,7 +322,7 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
                 </SelectContent>
               </Select>
             </div>
-            
+
             {selectedState && (
               <div className="bg-blue-50 p-3 sm:p-4 rounded-lg">
                 <div className="text-sm font-medium text-blue-900">Selected Region</div>
@@ -294,7 +337,7 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
       </Card>
 
       {/* File Upload */}
-      <NoteUpload 
+      <NoteUpload
         onFileUpload={handleFileUpload}
         isValidating={isValidating}
         disabled={!selectedState}
@@ -316,8 +359,8 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
         <CardContent>
           <div className="space-y-3">
             {recentValidations.map((validation) => (
-              <div 
-                key={validation.id} 
+              <div
+                key={validation.id}
                 className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
                 onClick={() => setValidationResults(validation)}
               >
@@ -329,15 +372,15 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
                       <AlertTriangle className="w-5 h-5 text-orange-600" />
                     )}
                   </div>
-                  
+
                   <div>
                     <div className="font-medium text-gray-900">{validation.file_name}</div>
                     <div className="text-sm text-gray-500">
-                      {validation.state} • {new Date(validation.created_at).toLocaleDateString()}
+                      {validation.state} - {new Date(validation.created_at).toLocaleDateString()}
                     </div>
                   </div>
                 </div>
-                
+
                 <div className="flex items-center space-x-2">
                   <Badge variant={validation.status === 'completed' ? 'secondary' : 'outline'}>
                     {validation.status === 'completed' ? 'Completed' : validation.status}
@@ -348,7 +391,7 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
                 </div>
               </div>
             ))}
-          
+
             {recentValidations.length === 0 && (
               <div className="text-center py-8 text-gray-500">
                 <FileCheck className="w-12 h-12 mx-auto mb-4 text-gray-300" />
