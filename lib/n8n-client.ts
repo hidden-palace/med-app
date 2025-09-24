@@ -63,7 +63,16 @@ export async function postToN8N(
   })
 
   if (!response.ok) {
-    const message = N8N request failed:  
+    let errorBody = ''
+
+    try {
+      errorBody = await response.text()
+    } catch (error) {
+      console.error('Error reading N8N error response body:', error)
+    }
+
+    const messageBase = `N8N request failed: ${response.status} ${response.statusText}`.trim()
+    const message = errorBody ? `${messageBase} - ${errorBody}` : messageBase
     throw new Error(message)
   }
 
@@ -121,3 +130,8 @@ export async function handleN8NWebhook(webhookData: any) {
 }
 
 export { N8N_PLACEHOLDER_URL }
+
+
+
+
+
