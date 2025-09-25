@@ -131,6 +131,14 @@ export default function Home() {
   useEffect(() => {
     let isActive = true;
 
+    const markAuthReady = () => {
+      if (!isActive) {
+        return;
+      }
+
+      setIsLoading(false);
+    };
+
     const initializeAuth = async () => {
       setIsLoading(true);
       try {
@@ -165,9 +173,7 @@ export default function Home() {
           lastAdminCheckUserIdRef.current = null;
         }
       } finally {
-        if (isActive) {
-          setIsLoading(false);
-        }
+        markAuthReady();
       }
     };
 
@@ -185,7 +191,18 @@ export default function Home() {
       const currentUser = session?.user ?? null;
       setUser(currentUser);
 
-      if (currentUser && adminCheckEvents.includes(event)) {
+      if (!currentUser) {
+        setProfile(null);
+        profileRef.current = null;
+        setIsAdmin(false);
+        adminStatusRef.current = false;
+        lastAdminCheckUserIdRef.current = null;
+        adminCheckPromiseRef.current = null;
+        markAuthReady();
+        return;
+      }
+
+      if (adminCheckEvents.includes(event)) {
         if (event === 'SIGNED_IN') {
           updateProfile(
             currentUser.id,
@@ -202,15 +219,7 @@ export default function Home() {
         await checkAdminStatus(currentUser.id, { force: shouldForceCheck, fallbackUser: currentUser });
       }
 
-      if (event === 'SIGNED_OUT') {
-        setUser(null);
-        setProfile(null);
-        setIsAdmin(false);
-        adminStatusRef.current = false;
-        profileRef.current = null;
-        lastAdminCheckUserIdRef.current = null;
-        adminCheckPromiseRef.current = null;
-      }
+      markAuthReady();
     });
 
     return () => {
