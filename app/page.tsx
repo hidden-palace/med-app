@@ -9,40 +9,50 @@ import { NoteValidator } from '@/components/validator/note-validator';
 import { AdminPanel } from '@/components/admin/admin-panel';
 import { AuthForm } from '@/components/auth/auth-form';
 import { supabase } from '@/lib/supabase';
-import { isUserAdmin, updateProfile } from '@/lib/database';
+import { getUserProfile, updateProfile } from '@/lib/database';
 import type { User, AuthChangeEvent } from '@supabase/supabase-js';
+import type { Profile } from '@/lib/supabase';
 
 type ActiveView = 'dashboard' | 'learning' | 'validator' | 'admin';
 
 export default function Home() {
   const [activeView, setActiveView] = useState<ActiveView>('dashboard');
   const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
 
   const lastAdminCheckUserIdRef = useRef<string | null>(null);
   const adminCheckPromiseRef = useRef<Promise<boolean> | null>(null);
   const adminStatusRef = useRef(false);
+  const profileRef = useRef<Profile | null>(null);
 
   useEffect(() => {
     adminStatusRef.current = isAdmin;
   }, [isAdmin]);
 
+  useEffect(() => {
+    profileRef.current = profile;
+  }, [profile]);
+
   const checkAdminStatus = useCallback(
     async (
       userId: string | null | undefined,
-      options: { force?: boolean } = {}
+      options: { force?: boolean; fallbackUser?: User } = {}
     ): Promise<boolean> => {
-      const { force = false } = options;
+      const { force = false, fallbackUser } = options;
 
       if (!userId) {
         setIsAdmin(false);
+        setProfile(null);
         adminStatusRef.current = false;
+        profileRef.current = null;
         lastAdminCheckUserIdRef.current = null;
         return false;
       }
 
       if (!force && lastAdminCheckUserIdRef.current === userId && !adminCheckPromiseRef.current) {
+        setProfile(profileRef.current ?? null);
         return adminStatusRef.current;
       }
 
@@ -52,13 +62,57 @@ export default function Home() {
 
       const promise = (async () => {
         try {
-          const adminStatus = await isUserAdmin(userId);
+          let userProfile = await getUserProfile(userId);
+
+          if (!userProfile && fallbackUser && force) {
+            const explicitEmail = typeof fallbackUser.email === 'string' ? fallbackUser.email : undefined;
+            const metadataEmailValue = fallbackUser.user_metadata?.email;
+            const metadataEmail = typeof metadataEmailValue === 'string' ? metadataEmailValue : undefined;
+            const metadataNameValue = fallbackUser.user_metadata?.full_name ?? fallbackUser.user_metadata?.name;
+            const metadataName = typeof metadataNameValue === 'string' ? metadataNameValue : undefined;
+
+            const emailToUse = explicitEmail ?? metadataEmail;
+            const nameToUse = metadataName ?? emailToUse;
+
+            if (emailToUse) {
+              const profileUpdates: Partial<Profile> = {
+                email: emailToUse,
+                last_sign_in_at: new Date().toISOString(),
+              };
+
+              if (nameToUse) {
+                profileUpdates.full_name = nameToUse;
+              }
+
+              try {
+                userProfile = await updateProfile(
+                  userId,
+                  profileUpdates,
+                  { fallbackUser, createIfMissing: true }
+                );
+              } catch (profileError) {
+                console.error('Error ensuring profile exists:', profileError);
+              }
+            }
+          }
+
+          if (!userProfile) {
+            userProfile = await getUserProfile(userId);
+          }
+
+          setProfile(userProfile ?? null);
+          profileRef.current = userProfile ?? null;
+
+          const adminStatus = userProfile?.role === 'admin';
           setIsAdmin(adminStatus);
           adminStatusRef.current = adminStatus;
           lastAdminCheckUserIdRef.current = userId;
+
           return adminStatus;
         } catch (error) {
           console.error('Error checking admin status:', error);
+          setProfile(null);
+          profileRef.current = null;
           setIsAdmin(false);
           adminStatusRef.current = false;
           lastAdminCheckUserIdRef.current = userId;
@@ -92,18 +146,22 @@ export default function Home() {
         setUser(currentUser);
 
         if (currentUser) {
-          void checkAdminStatus(currentUser.id, { force: true });
+          void checkAdminStatus(currentUser.id, { force: true, fallbackUser: currentUser });
         } else {
           setIsAdmin(false);
+          setProfile(null);
           adminStatusRef.current = false;
+          profileRef.current = null;
           lastAdminCheckUserIdRef.current = null;
         }
       } catch (error) {
         console.error('Error initializing auth:', error);
         if (isActive) {
           setUser(null);
+          setProfile(null);
           setIsAdmin(false);
           adminStatusRef.current = false;
+          profileRef.current = null;
           lastAdminCheckUserIdRef.current = null;
         }
       } finally {
@@ -115,7 +173,7 @@ export default function Home() {
 
     initializeAuth();
 
-    const adminCheckEvents: AuthChangeEvent[] = ['SIGNED_IN', 'TOKEN_REFRESHED', 'USER_UPDATED'];
+    const adminCheckEvents: AuthChangeEvent[] = ['INITIAL_SESSION', 'SIGNED_IN', 'TOKEN_REFRESHED', 'USER_UPDATED'];
 
     const {
       data: { subscription },
@@ -135,18 +193,21 @@ export default function Home() {
               last_sign_in_at: new Date().toISOString(),
             },
             { fallbackUser: currentUser }
-          ).catch((error) => {
-            console.error('Error updating last sign in time:', error);
+          ).catch((updateError) => {
+            console.error('Error updating last sign in time:', updateError);
           });
         }
 
-        const shouldForceCheck = event === 'SIGNED_IN' || event === 'USER_UPDATED';
-        await checkAdminStatus(currentUser.id, { force: shouldForceCheck });
+        const shouldForceCheck = event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION';
+        await checkAdminStatus(currentUser.id, { force: shouldForceCheck, fallbackUser: currentUser });
       }
 
       if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setProfile(null);
         setIsAdmin(false);
         adminStatusRef.current = false;
+        profileRef.current = null;
         lastAdminCheckUserIdRef.current = null;
         adminCheckPromiseRef.current = null;
       }
@@ -215,7 +276,7 @@ export default function Home() {
     <div className="flex h-screen bg-gray-50 overflow-hidden">
       <Sidebar activeView={activeView} onViewChange={setActiveView} isAdmin={isAdmin} />
       <div className="flex-1 flex flex-col min-w-0">
-        <Header activeView={activeView} user={user} />
+        <Header activeView={activeView} user={user} profile={profile} />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">{renderActiveView()}</main>
       </div>
     </div>

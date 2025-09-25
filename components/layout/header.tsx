@@ -5,10 +5,12 @@ import { Bell, User, Search, LogOut } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { supabase } from '@/lib/supabase';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
+import type { Profile } from '@/lib/supabase';
 
 interface HeaderProps {
   activeView: string;
   user?: SupabaseUser | null;
+  profile?: Profile | null;
   onMobileMenuClick?: () => void;
 }
 
@@ -19,7 +21,7 @@ const viewTitles = {
   admin: 'Administration'
 };
 
-export function Header({ activeView, user, onMobileMenuClick }: HeaderProps) {
+export function Header({ activeView, user, profile, onMobileMenuClick }: HeaderProps) {
   const handleLogout = async () => {
     try {
       await supabase.auth.signOut();
@@ -27,6 +29,10 @@ export function Header({ activeView, user, onMobileMenuClick }: HeaderProps) {
       console.error('Error signing out:', error);
     }
   };
+
+  const displayName = profile?.full_name?.trim() || user?.email || 'User';
+  const emailDisplay = profile?.email && profile.email !== displayName ? profile.email : undefined;
+  const tooltip = emailDisplay ? `${displayName} (${emailDisplay})` : displayName;
 
   return (
     <header className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4">
@@ -58,7 +64,13 @@ export function Header({ activeView, user, onMobileMenuClick }: HeaderProps) {
           </Button>
           
           <div className="flex items-center space-x-2">
-            <Button variant="outline" size="icon">
+            <div className="hidden sm:flex flex-col items-end text-right">
+              <span className="text-sm font-medium text-gray-900">{displayName}</span>
+              {emailDisplay && (
+                <span className="text-xs text-gray-500">{emailDisplay}</span>
+              )}
+            </div>
+            <Button variant="outline" size="icon" title={tooltip} aria-label={tooltip}>
               <User className="w-4 h-4" />
             </Button>
             
@@ -71,3 +83,4 @@ export function Header({ activeView, user, onMobileMenuClick }: HeaderProps) {
     </header>
   );
 }
+
