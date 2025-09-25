@@ -202,6 +202,8 @@ export default function Home() {
         return;
       }
 
+      markAuthReady();
+
       if (adminCheckEvents.includes(event)) {
         if (event === 'SIGNED_IN') {
           updateProfile(
@@ -216,10 +218,8 @@ export default function Home() {
         }
 
         const shouldForceCheck = event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION';
-        await checkAdminStatus(currentUser.id, { force: shouldForceCheck, fallbackUser: currentUser });
+        void checkAdminStatus(currentUser.id, { force: shouldForceCheck, fallbackUser: currentUser });
       }
-
-      markAuthReady();
     });
 
     return () => {
