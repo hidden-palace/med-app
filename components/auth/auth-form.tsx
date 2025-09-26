@@ -109,7 +109,7 @@ export function AuthForm({ onAuthStateChange }: AuthFormProps) {
               <BookOpen className="w-6 h-6 text-white" />
             </div>
           </div>
-          <h1 className="text-3xl font-bold text-gray-900">MedLearn Platform</h1>
+          <h1 className="text-3xl font-bold text-gray-900">MUptoShift</h1>
           <p className="text-gray-600 mt-2">Comprehensive learning platform with note validation</p>
         </div>
 
