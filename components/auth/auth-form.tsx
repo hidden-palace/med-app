@@ -44,13 +44,34 @@ export function AuthForm({ onAuthStateChange }: AuthFormProps) {
     setSuccess(null);
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
       if (error) {
         throw error;
+      }
+
+      const session = data?.session;
+      const signedInUser = session?.user ?? null;
+      const sessionId = (session as { session_id?: string } | null)?.session_id;
+      const accessToken = session?.access_token;
+
+      if (signedInUser && sessionId && accessToken) {
+        void fetch('/api/auth/force-single-session', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
+            userId: signedInUser.id,
+            sessionId,
+          }),
+        }).catch((err) => {
+          console.error('Failed to enforce single session:', err);
+        });
       }
 
       setSuccess('Successfully signed in!');

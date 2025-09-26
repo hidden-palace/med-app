@@ -12,6 +12,7 @@ interface HeaderProps {
   user?: SupabaseUser | null;
   profile?: Profile | null;
   onMobileMenuClick?: () => void;
+  onLogout?: () => Promise<void> | void;
 }
 
 const viewTitles = {
@@ -21,10 +22,14 @@ const viewTitles = {
   admin: 'Administration'
 };
 
-export function Header({ activeView, user, profile, onMobileMenuClick }: HeaderProps) {
+export function Header({ activeView, user, profile, onMobileMenuClick, onLogout }: HeaderProps) {
   const handleLogout = async () => {
     try {
-      await supabase.auth.signOut();
+      if (onLogout) {
+        await onLogout();
+      } else {
+        await supabase.auth.signOut();
+      }
     } catch (error) {
       console.error('Error signing out:', error);
     }

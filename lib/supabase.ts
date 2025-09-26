@@ -82,6 +82,10 @@ export interface ValidationHistory {
   status: 'processing' | 'completed' | 'failed'
   result_summary?: string
   result_details?: any
+  compliance_summary?: string | null
+  overall_score?: number | null
+  lcd_results?: any[] | null
+  recommendations?: any[] | null
   n8n_execution_id?: string
   file_url?: string
   created_at: string

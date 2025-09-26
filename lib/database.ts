@@ -2,20 +2,206 @@ import { supabase } from './supabase'
 import type { User as SupabaseAuthUser } from '@supabase/supabase-js'
 import type { Course, Module, UserProgress, ValidationHistory, RecentActivity, Profile } from './supabase'
 
-// Debug function to test database connection
-export async function testDatabaseConnection() {
-  try {
-    const { data, error } = await supabase
-      .from('courses')
-      .select('*', { count: 'exact', head: true })
-    
-    console.log('Database connection test:', { data, error })
-    return { success: !error, data, error }
-  } catch (err) {
-    console.error('Database connection failed:', err)
-    return { success: false, error: err }
+export class ValidationRecordNotFoundError extends Error {
+  constructor(validationId: string) {
+    super(`Validation record ${validationId} not found`)
+    this.name = 'ValidationRecordNotFoundError'
   }
 }
+
+type NormalizedValidationStorage = {
+  structuredDetails: any;
+  complianceSummary: string | null;
+  overallScore: number | null;
+  lcdResults: any[] | null;
+  recommendations: any[] | null;
+};
+
+function normalizeValidationPayloadForStorage(
+  resultDetails: unknown,
+  fallbackSummary?: string | null
+): NormalizedValidationStorage {
+  const structuredDetails = parseResultDetailsForStorage(resultDetails);
+  const overallSummary = structuredDetails?.overallSummary ?? structuredDetails?.summary ?? {};
+
+  const complianceSummary =
+    fallbackSummary ??
+    overallSummary.summary ??
+    overallSummary.description ??
+    overallSummary.message ??
+    null;
+
+  const overallScore = extractNumericScoreValue(
+    overallSummary.complianceScore ??
+      overallSummary.score ??
+      structuredDetails?.overallScore
+  );
+
+  const lcdResultsRaw = toArrayForStorage(
+    structuredDetails?.lcdChecks ??
+      structuredDetails?.lcd_results ??
+      structuredDetails?.lcdCompliance
+  );
+
+  const recommendations = aggregateRecommendationsForStorage(structuredDetails, lcdResultsRaw);
+
+  return {
+    structuredDetails: structuredDetails ?? null,
+    complianceSummary,
+    overallScore,
+    lcdResults: lcdResultsRaw.length > 0 ? lcdResultsRaw : null,
+    recommendations,
+  };
+}
+
+function parseResultDetailsForStorage(details: unknown): any {
+  if (!details) {
+    return {};
+  }
+
+  if (typeof details === 'string') {
+    try {
+      return JSON.parse(details);
+    } catch (error) {
+      console.warn('Unable to parse result details string payload:', error);
+      return {};
+    }
+  }
+
+  return details;
+}
+
+function extractNumericScoreValue(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.round(value);
+  }
+
+  if (typeof value === 'string') {
+    const match = value.match(/-?\d+(?:\.\d+)?/);
+    if (match) {
+      return Math.round(Number(match[0]));
+    }
+  }
+
+  return null;
+}
+
+function toArrayForStorage(value: unknown): any[] {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (error) {
+      // ignore parse errors for plain strings
+    }
+
+    return value
+      .split(/\n|;/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>);
+  }
+
+  return [value];
+}
+
+function aggregateRecommendationsForStorage(details: any, lcdResultsRaw: any[]): any[] | null {
+  const recommendations: any[] = [];
+
+  const push = (items: any[]) => {
+    for (const item of items) {
+      if (!item || !item.text) continue;
+      const key = item.text.toLowerCase();
+      if (!recommendations.some((existing) => existing.text?.toLowerCase() === key)) {
+        recommendations.push(item);
+      }
+    }
+  };
+
+  push(normalizeRecommendationEntries(details?.recommendations, { priority: 'medium', source: 'AI Analysis' }));
+  push(
+    normalizeRecommendationEntries(details?.overallSummary?.recommendations, {
+      priority: 'medium',
+      source: 'Overall Summary',
+    })
+  );
+  push(
+    normalizeRecommendationEntries(details?.overallSummary?.nextSteps, {
+      priority: 'high',
+      source: 'Next Steps',
+    })
+  );
+
+  lcdResultsRaw.forEach((entry) => {
+    if (entry && typeof entry === 'object') {
+      push(
+        normalizeRecommendationEntries((entry as Record<string, unknown>).recommendations, {
+          priority: (entry as Record<string, unknown>).priority ?? 'medium',
+          source: (entry as Record<string, unknown>).title ?? (entry as Record<string, unknown>).lcd,
+        })
+      );
+    }
+  });
+
+  return recommendations.length > 0 ? recommendations : null;
+}
+
+function normalizeRecommendationEntries(
+  value: unknown,
+  defaults: Record<string, unknown> = {}
+): any[] {
+  const array = toArrayForStorage(value);
+  const normalized: any[] = [];
+
+  array.forEach((entry, index) => {
+    if (!entry) return;
+
+    if (typeof entry === 'string') {
+      const text = entry.trim();
+      if (!text) return;
+      normalized.push({
+        id: `${defaults.source ?? 'rec'}-${index}`,
+        text,
+        priority: (defaults.priority ?? 'medium') as string,
+        category: defaults.category ?? null,
+        source: defaults.source ?? null,
+      });
+      return;
+    }
+
+    if (typeof entry === 'object') {
+      const obj = entry as Record<string, unknown>;
+      const text = String(
+        obj.text ??
+          obj.description ??
+          obj.suggestion ??
+          obj.recommendation ??
+          obj.action ??
+          obj.summary ??
+          ''
+      ).trim();
+
+      if (!text) return;
+
+      normalized.push({
+        ...obj,
+        id: obj.id ?? `${defaults.source ?? 'rec'}-${index}`,
+        text,
+        priority: obj.priority ?? defaults.priority ?? 'medium',
+        category: obj.category ?? defaults.category ?? null,
+        source: obj.source ?? defaults.source ?? null,
+      });
+    }
+  });
+
+  return normalized;
+}
+
 
 // Course and Module functions
 export async function getCourses() {
@@ -208,21 +394,45 @@ export async function updateValidationResult(
   resultDetails?: any,
   n8nExecutionId?: string
 ) {
+  const normalized = normalizeValidationPayloadForStorage(resultDetails, resultSummary ?? null);
+
+  const updatePayload: Record<string, unknown> = {
+    status,
+    result_summary: resultSummary ?? normalized.complianceSummary,
+    compliance_summary: normalized.complianceSummary ?? resultSummary ?? null,
+    result_details: normalized.structuredDetails ?? null,
+    n8n_execution_id: n8nExecutionId ?? null,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (normalized.overallScore !== null) {
+    updatePayload.overall_score = normalized.overallScore;
+  }
+
+  if (normalized.lcdResults !== null) {
+    updatePayload.lcd_results = normalized.lcdResults;
+  }
+
+  if (normalized.recommendations !== null) {
+    updatePayload.recommendations = normalized.recommendations;
+  }
+
   const { data, error } = await supabase
     .from('validation_history')
-    .update({
-      status,
-      result_summary: resultSummary,
-      result_details: resultDetails,
-      n8n_execution_id: n8nExecutionId,
-      updated_at: new Date().toISOString()
-    })
+    .update(updatePayload)
     .eq('id', validationId)
     .select()
-    .single()
-  
-  if (error) throw error
-  return data as ValidationHistory
+    .maybeSingle();
+
+  if (error && (error as { code?: string }).code !== 'PGRST116') {
+    throw error;
+  }
+
+  if (!data) {
+    throw new ValidationRecordNotFoundError(validationId);
+  }
+
+  return data as ValidationHistory;
 }
 
 export async function getValidationHistory(userId: string, limit: number = 10) {
@@ -939,6 +1149,14 @@ export async function isUserAdmin(userId: string): Promise<boolean> {
     return false
   }
 }
+
+
+
+
+
+
+
+
 
 
 

@@ -229,6 +229,24 @@ export default function Home() {
     };
   }, [checkAdminStatus]);
 
+  const handleLogout = useCallback(async () => {
+    setUser(null);
+    setProfile(null);
+    setIsAdmin(false);
+    adminStatusRef.current = false;
+    profileRef.current = null;
+    lastAdminCheckUserIdRef.current = null;
+    adminCheckPromiseRef.current = null;
+
+    try {
+      await supabase.auth.signOut();
+    } catch (error) {
+      console.error('Error signing out:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
   const handleNavigateToLearning = () => {
     setActiveView('learning');
   };
@@ -285,7 +303,7 @@ export default function Home() {
     <div className="flex h-screen bg-gray-50 overflow-hidden">
       <Sidebar activeView={activeView} onViewChange={setActiveView} isAdmin={isAdmin} />
       <div className="flex-1 flex flex-col min-w-0">
-        <Header activeView={activeView} user={user} profile={profile} />
+        <Header activeView={activeView} user={user} profile={profile} onLogout={handleLogout} />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">{renderActiveView()}</main>
       </div>
     </div>
