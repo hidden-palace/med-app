@@ -1,27 +1,75 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { handleN8NWebhook } from '@/lib/n8n-client';
-import { ValidationRecordNotFoundError } from '@/lib/database';
+import { updateValidationResult } from '@/lib/database';
 
 export async function POST(request: NextRequest) {
   try {
-    const webhookData = await request.json();
+    console.log('N8N webhook received');
     
-    // Validate webhook data
-    if (!webhookData.validationId || !webhookData.status) {
+    let webhookData;
+    try {
+      webhookData = await request.json();
+      console.log('Webhook data parsed:', JSON.stringify(webhookData, null, 2));
+    } catch (parseError) {
+      console.error('Error parsing webhook JSON:', parseError);
       return NextResponse.json(
-        { error: 'Invalid webhook data' },
+        { error: 'Invalid JSON payload' },
         { status: 400 }
       );
     }
     
-    // Process the webhook
-    const result = await handleN8NWebhook(webhookData);
+    // Validate webhook data
+    if (!webhookData.validationId) {
+      console.error('Missing validationId in webhook data');
+      return NextResponse.json(
+        { error: 'Missing validationId' },
+        { status: 400 }
+      );
+    }
     
-    return NextResponse.json({ success: true, result });
+    if (!webhookData.status) {
+      console.error('Missing status in webhook data');
+      return NextResponse.json(
+        { error: 'Missing status' },
+        { status: 400 }
+      );
+    }
+    
+    console.log('Processing webhook for validation:', webhookData.validationId);
+    
+    // Extract the data we need
+    const {
+      validationId,
+      status,
+      resultSummary,
+      resultDetails,
+      executionId
+    } = webhookData;
+    
+    // Update the validation record directly
+    const result = await updateValidationResult(
+      validationId,
+      status === 'completed' ? 'completed' : 'failed',
+      resultSummary,
+      resultDetails,
+      executionId
+    );
+    
+    console.log('Validation record updated successfully:', result.id);
+    
+    return NextResponse.json({ 
+      success: true, 
+      message: 'Webhook processed successfully',
+      validationId: result.id 
+    });
   } catch (error) {
     console.error('Error processing N8N webhook:', error);
+    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { 
+        error: 'Internal server error',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      },
       { status: 500 }
     );
   }
