@@ -1,5 +1,4 @@
 import { supabase } from './supabase'
-import type { User as SupabaseAuthUser } from '@supabase/supabase-js'
 import type { Course, Module, UserProgress, ValidationHistory, RecentActivity, Profile } from './supabase'
 
 // Debug function to test database connection
@@ -208,21 +207,72 @@ export async function updateValidationResult(
   resultDetails?: any,
   n8nExecutionId?: string
 ) {
-  const { data, error } = await supabase
-    .from('validation_history')
-    .update({
+  try {
+    console.log('Updating validation result:', {
+      validationId,
+      status,
+      hasResultSummary: !!resultSummary,
+      hasResultDetails: !!resultDetails,
+      n8nExecutionId
+    });
+    
+    // Extract additional fields from resultDetails if available
+    let updateData: any = {
       status,
       result_summary: resultSummary,
       result_details: resultDetails,
       n8n_execution_id: n8nExecutionId,
       updated_at: new Date().toISOString()
-    })
-    .eq('id', validationId)
-    .select()
-    .single()
-  
-  if (error) throw error
-  return data as ValidationHistory
+    };
+    
+    // Extract specific fields from resultDetails if they exist
+    if (resultDetails) {
+      // Extract overall score if available
+      if (resultDetails.overallSummary?.complianceScore) {
+        const scoreMatch = resultDetails.overallSummary.complianceScore.match(/(\d+)%/);
+        if (scoreMatch) {
+          updateData.overall_score = parseInt(scoreMatch[1]);
+        }
+      }
+      
+      // Extract LCD results if available
+      if (resultDetails.lcdChecks) {
+        updateData.lcd_results = resultDetails.lcdChecks;
+      }
+      
+      // Extract recommendations if available
+      if (resultDetails.overallSummary?.nextSteps) {
+        updateData.recommendations = [{
+          category: 'general',
+          priority: 'medium',
+          suggestion: resultDetails.overallSummary.nextSteps
+        }];
+      }
+      
+      // Extract compliance summary
+      if (resultDetails.overallSummary?.complianceStatus) {
+        updateData.compliance_summary = resultDetails.overallSummary.complianceStatus;
+      }
+    }
+    
+    const { data, error } = await supabase
+      .from('validation_history')
+      .update(updateData)
+      .eq('id', validationId)
+      .select()
+      .single();
+    
+    if (error) {
+      console.error('Supabase error updating validation result:', error);
+      throw error;
+    }
+    
+    console.log('Validation result updated successfully:', data.id);
+    return data as ValidationHistory;
+  } catch (error) {
+    console.error('Error in updateValidationResult:', error);
+    throw error;
+  }
 }
 
 export async function getValidationHistory(userId: string, limit: number = 10) {
@@ -361,7 +411,7 @@ export async function getProfiles() {
   }
 }
 
-export async function getUserProfile(userId: string): Promise<Profile | null> {
+export async function getUserProfile(userId: string) {
   try {
     console.log('Fetching user profile:', userId)
     const { data, error } = await supabase
@@ -369,98 +419,42 @@ export async function getUserProfile(userId: string): Promise<Profile | null> {
       .select('*')
       .eq('id', userId)
       .maybeSingle()
-
+    
     console.log('User profile query result:', { data, error })
-
+    
     if (error) {
-      if ((error as { code?: string }).code === 'PGRST116') {
-        return null
-      }
-
       console.error('Error fetching user profile:', error)
       throw error
     }
-
-    return (data as Profile) ?? null
+    
+    return data as Profile | null
   } catch (err) {
     console.error('getUserProfile failed:', err)
     throw err
   }
 }
 
-type UpdateProfileOptions = {
-  fallbackUser?: SupabaseAuthUser
-  createIfMissing?: boolean
-}
-
-export async function updateProfile(
-  id: string,
-  updates: Partial<Profile>,
-  options: UpdateProfileOptions = {}
-): Promise<Profile | null> {
-  const { fallbackUser, createIfMissing = true } = options
-
+export async function updateProfile(id: string, updates: Partial<Profile>) {
   try {
-    const timestamp = new Date().toISOString()
-    const updatePayload = {
-      ...updates,
-      updated_at: timestamp,
-    }
-
-    console.log('Updating profile:', { id, updates: updatePayload })
-
-    const { data: updatedProfile, error: updateError } = await supabase
+    console.log('Updating profile:', { id, updates })
+    const { data, error } = await supabase
       .from('profiles')
-      .update(updatePayload)
+      .update({
+        ...updates,
+        updated_at: new Date().toISOString()
+      })
       .eq('id', id)
       .select()
-      .maybeSingle()
-
-    if (!updateError && updatedProfile) {
-      return updatedProfile as Profile
+      .single()
+    
+    console.log('Profile update result:', { data, error })
+    
+    if (error) {
+      console.error('Error updating profile:', error)
+      throw error
     }
-
-    if (updateError && !['PGRST116', 'PGRST204', 'PGRST108'].includes(updateError.code ?? '')) {
-      console.error('Error updating profile:', updateError)
-      throw updateError
-    }
-
-    if (!createIfMissing) {
-      return null
-    }
-
-    const fallbackEmail = updatePayload.email ?? fallbackUser?.email
-
-    if (!fallbackEmail) {
-      throw new Error('Cannot insert profile without email')
-    }
-
-    const insertPayload = {
-      id,
-      email: fallbackEmail,
-      full_name:
-        updatePayload.full_name ?? fallbackUser?.user_metadata?.full_name ?? fallbackEmail,
-      is_active: updatePayload.is_active ?? true,
-      role: updatePayload.role ?? 'user',
-      last_sign_in_at: updatePayload.last_sign_in_at ?? null,
-      created_at: timestamp,
-      updated_at: timestamp,
-    }
-
-    console.log('Profile missing, inserting new record:', insertPayload)
-
-    const { data: insertedProfile, error: insertError } = await supabase
-      .from('profiles')
-      .insert(insertPayload)
-      .select()
-      .maybeSingle()
-
-    if (insertError) {
-      console.error('Error inserting profile:', insertError)
-      throw insertError
-    }
-
-    return (insertedProfile as Profile) ?? null
+    
+    return data as Profile | null
   } catch (err) {
     console.error('updateProfile failed:', err)
     throw err
@@ -933,25 +927,14 @@ export async function getCourseById(courseId: string) {
 export async function isUserAdmin(userId: string): Promise<boolean> {
   try {
     const profile = await getUserProfile(userId)
-    return profile?.role === 'admin'
+    // If profile doesn't exist, treat as non-admin
+    if (!profile) {
+      return false
+    }
+    return profile.role === 'admin' && profile.is_active
   } catch (error) {
     console.error('Error checking admin status:', error)
+    // If there's an error, treat as non-admin to prevent blocking
     return false
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
