@@ -134,14 +134,15 @@ function resolveTriggerEndpoint(): string {
     );
   }
 
-  return `${baseUrl.replace(/\/+$, '')}/api/n8n/trigger`;
+  const trimmedBaseUrl = baseUrl.replace(/\/+$, '');
+  return `${trimmedBaseUrl}/api/n8n/trigger`;
 }
 
 export async function sendToN8N(
   validationData: ValidationRequest
 ): Promise<ValidationResponse> {
   const directWebhook = process.env.NEXT_PUBLIC_N8N_WEBHOOK_URL;
-  const hasDirectWebhook = !!directWebhook && directWebhook !== N8N_PLACEHOLDER_URL;
+  const hasDirectWebhook = Boolean(directWebhook && directWebhook !== N8N_PLACEHOLDER_URL);
 
   if (hasDirectWebhook) {
     console.log('Sending validation request directly to N8N webhook.');
@@ -159,32 +160,49 @@ export async function sendToN8N(
     body: JSON.stringify(validationData),
   });
 
-  let payload: any = null;
+  let payload: Record<string, unknown> | null = null;
   try {
-    payload = await response.json();
+    payload = (await response.json()) as Record<string, unknown> | null;
   } catch (error) {
     console.warn('Unable to parse proxy response as JSON:', error);
   }
 
-  if (!response.ok || !payload?.success) {
+  const payloadSuccess =
+    !!(
+      payload &&
+      Object.prototype.hasOwnProperty.call(payload, 'success') &&
+      Boolean((payload as { success?: unknown }).success)
+    );
+
+  if (!response.ok || !payloadSuccess) {
+    const rawError =
+      payload && typeof (payload as { error?: unknown }).error === 'string'
+        ? ((payload as { error: string }).error).trim()
+        : '';
+
     const errorMessage =
-      (payload && typeof payload.error === 'string' && payload.error.trim())
-        ? payload.error.trim()
+      rawError.length > 0
+        ? rawError
         : `Failed to trigger validation: ${response.status} ${response.statusText}`;
 
     throw new Error(errorMessage);
   }
 
-  if (payload.data) {
-    const data = payload.data as Record<string, unknown>;
+  if (payload && typeof (payload as { data?: unknown }).data === 'object' && (payload as { data?: unknown }).data) {
+    const data = (payload as { data: Record<string, unknown> }).data;
     return {
-      executionId: normalizeExecutionId(data.executionId),
-      status: normalizeStatus(data.status),
-      message: normalizeMessage(data.message),
+      executionId: normalizeExecutionId((data as { executionId?: unknown }).executionId),
+      status: normalizeStatus((data as { status?: unknown }).status),
+      message: normalizeMessage((data as { message?: unknown }).message),
     };
   }
 
-  return buildDefaultResponse(payload?.message);
+  const fallbackMessage =
+    payload && typeof (payload as { message?: unknown }).message === 'string'
+      ? ((payload as { message: string }).message)
+      : undefined;
+
+  return buildDefaultResponse(fallbackMessage);
 }
 
 export async function handleN8NWebhook(webhookData: any) {
