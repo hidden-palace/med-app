@@ -134,8 +134,8 @@ function resolveTriggerEndpoint(): string {
     );
   }
 
-  const trimmedBaseUrl = baseUrl.replace(/\/+$, '');
-  return `${trimmedBaseUrl}/api/n8n/trigger`;
+  const trimmedBaseUrl = baseUrl.replace(/\/+$/, '');
+  const trimmedBaseUrl = baseUrl.replace(/\/+$/, '');
 }
 
 export async function sendToN8N(
