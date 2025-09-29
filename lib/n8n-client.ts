@@ -143,8 +143,9 @@ export async function sendToN8N(
 ): Promise<ValidationResponse> {
   const directWebhook = process.env.NEXT_PUBLIC_N8N_WEBHOOK_URL;
   const hasDirectWebhook = Boolean(directWebhook && directWebhook !== N8N_PLACEHOLDER_URL);
+  const isServer = typeof window === 'undefined';
 
-  if (hasDirectWebhook) {
+  if (hasDirectWebhook && isServer) {
     console.log('Sending validation request directly to N8N webhook.');
     return postToN8N(validationData, directWebhook as string);
   }
