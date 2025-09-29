@@ -1,113 +1,214 @@
-// N8N Integration for Note Validation
-const N8N_WEBHOOK_URL =
-  process.env.NEXT_PUBLIC_N8N_WEBHOOK_URL ||
-  'https://your-n8n-instance.com/webhook/validate-note'
+// N8N integration utilities for note validation
+export const N8N_PLACEHOLDER_URL = 'https://your-n8n-instance.com/webhook/validate-note';
 
 export interface ValidationRequest {
-  validationId: string
-  fileName: string
-  fileType: string
-  content: string
-  state: string
-  region: string
-  userId: string
-  fileUrl?: string
+  validationId: string;
+  fileName: string;
+  fileType: string;
+  content: string;
+  state: string;
+  region: string;
+  userId: string;
+  fileUrl?: string;
 }
 
 export interface ValidationResponse {
-  executionId: string
-  status: 'processing' | 'completed' | 'failed'
-  message: string
+  executionId: string;
+  status: 'processing' | 'completed' | 'failed';
+  message: string;
+}
+
+function ensureConfiguredWebhookUrl(url: string | null | undefined): string {
+  if (!url || url === N8N_PLACEHOLDER_URL) {
+    throw new Error(
+      'N8N webhook URL is not configured. Please set NEXT_PUBLIC_N8N_WEBHOOK_URL or N8N_WEBHOOK_URL.'
+    );
+  }
+
+  return url;
+}
+
+function normalizeStatus(value: unknown): ValidationResponse['status'] {
+  if (value === 'completed' || value === 'failed') {
+    return value;
+  }
+
+  return 'processing';
+}
+
+function normalizeMessage(value: unknown, fallback = 'Request accepted'): string {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value.trim();
+  }
+
+  return fallback;
+}
+
+function normalizeExecutionId(value: unknown): string {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value.trim();
+  }
+
+  return 'unknown';
+}
+
+function buildDefaultResponse(message?: string): ValidationResponse {
+  return {
+    executionId: 'unknown',
+    status: 'processing',
+    message: normalizeMessage(message, 'Request accepted'),
+  };
+}
+
+async function parseN8NResponse(response: Response): Promise<ValidationResponse> {
+  if (!response.ok) {
+    let errorBody = '';
+    try {
+      errorBody = await response.text();
+    } catch (error) {
+      console.warn('Failed to read N8N error response body:', error);
+    }
+
+    const errorMessage = errorBody
+      ? `N8N request failed: ${response.status} ${response.statusText} - ${errorBody}`
+      : `N8N request failed: ${response.status} ${response.statusText}`;
+
+    throw new Error(errorMessage);
+  }
+
+  const contentType = response.headers.get('content-type') ?? '';
+
+  if (contentType.includes('application/json')) {
+    try {
+      const parsed = (await response.json()) as Record<string, unknown>;
+      return {
+        executionId: normalizeExecutionId(parsed.executionId),
+        status: normalizeStatus(parsed.status),
+        message: normalizeMessage(parsed.message),
+      };
+    } catch (error) {
+      console.warn('Unable to parse N8N JSON response, falling back to text:', error);
+    }
+  }
+
+  const text = await response.text();
+  return buildDefaultResponse(text);
+}
+
+export async function postToN8N(
+  validationData: ValidationRequest,
+  webhookUrl: string
+): Promise<ValidationResponse> {
+  const targetUrl = ensureConfiguredWebhookUrl(webhookUrl);
+
+  const response = await fetch(targetUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(validationData),
+  });
+
+  console.log('N8N webhook response status:', response.status, 'url:', targetUrl);
+
+  return parseN8NResponse(response);
+}
+
+function resolveTriggerEndpoint(): string {
+  if (typeof window !== 'undefined') {
+    return '/api/n8n/trigger';
+  }
+
+  const baseUrl =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    (process.env.VERCEL_URL
+      ? process.env.VERCEL_URL.startsWith('http')
+        ? process.env.VERCEL_URL
+        : `https://${process.env.VERCEL_URL}`
+      : null);
+
+  if (!baseUrl) {
+    throw new Error(
+      'Unable to determine base URL for the N8N trigger endpoint. Set NEXT_PUBLIC_SITE_URL or provide N8N webhook configuration.'
+    );
+  }
+
+  return `${baseUrl.replace(/\/+$, '')}/api/n8n/trigger`;
 }
 
 export async function sendToN8N(
   validationData: ValidationRequest
 ): Promise<ValidationResponse> {
-  try {
-    // Debug: Log the webhook URL to verify it's loaded correctly
-    console.log('N8N_WEBHOOK_URL at runtime:', N8N_WEBHOOK_URL);
-    console.log('Validation data being sent:', validationData);
-    
-    // ✅ Check if the webhook URL is still the placeholder
-    if (N8N_WEBHOOK_URL === 'https://your-n8n-instance.com/webhook/validate-note') {
-      throw new Error(
-        'N8N webhook URL is not configured. Please set NEXT_PUBLIC_N8N_WEBHOOK_URL in your environment variables.'
-      )
-    }
+  const directWebhook = process.env.NEXT_PUBLIC_N8N_WEBHOOK_URL;
+  const hasDirectWebhook = !!directWebhook && directWebhook !== N8N_PLACEHOLDER_URL;
 
-    const response = await fetch(N8N_WEBHOOK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(validationData),
-    })
-
-    console.log('N8N response status:', response.status);
-    console.log('N8N response headers:', Object.fromEntries(response.headers.entries()));
-
-    if (!response.ok) {
-      throw new Error(`N8N request failed: ${response.statusText}`)
-    }
-
-    // Handle both JSON and text responses from N8N
-    const contentType = response.headers.get('content-type')
-    let result: ValidationResponse
-    
-    if (contentType && contentType.includes('application/json')) {
-      // Parse as JSON if content-type indicates JSON
-      result = await response.json()
-      console.log('N8N JSON response:', result);
-    } else {
-      // Handle text responses (like "Accepted")
-      const textResponse = await response.text()
-      console.log('N8N text response:', textResponse)
-      
-      // Create a mock ValidationResponse for text responses
-      result = {
-        executionId: 'unknown',
-        status: 'processing',
-        message: textResponse || 'Request accepted'
-      }
-    }
-    
-    return result as ValidationResponse
-  } catch (error) {
-    console.error('Error sending to N8N:', error)
-    const errorDetails = {
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined,
-      webhookUrl: N8N_WEBHOOK_URL
-    }
-    console.error('Full error details:', errorDetails);
-    throw error
+  if (hasDirectWebhook) {
+    console.log('Sending validation request directly to N8N webhook.');
+    return postToN8N(validationData, directWebhook as string);
   }
+
+  console.log('Proxying validation request through /api/n8n/trigger.');
+
+  const triggerEndpoint = resolveTriggerEndpoint();
+  const response = await fetch(triggerEndpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(validationData),
+  });
+
+  let payload: any = null;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    console.warn('Unable to parse proxy response as JSON:', error);
+  }
+
+  if (!response.ok || !payload?.success) {
+    const errorMessage =
+      (payload && typeof payload.error === 'string' && payload.error.trim())
+        ? payload.error.trim()
+        : `Failed to trigger validation: ${response.status} ${response.statusText}`;
+
+    throw new Error(errorMessage);
+  }
+
+  if (payload.data) {
+    const data = payload.data as Record<string, unknown>;
+    return {
+      executionId: normalizeExecutionId(data.executionId),
+      status: normalizeStatus(data.status),
+      message: normalizeMessage(data.message),
+    };
+  }
+
+  return buildDefaultResponse(payload?.message);
 }
 
-// Function to handle N8N webhook responses
 export async function handleN8NWebhook(webhookData: any) {
   console.log('handleN8NWebhook called with:', webhookData);
-  
-  const { 
-    validationId, 
-    status, 
-    resultSummary, 
-    resultDetails, 
-    executionId 
-  } = webhookData;
-  
+
+  const {
+    validationId,
+    status,
+    resultSummary,
+    resultDetails,
+    executionId,
+  } = webhookData ?? {};
+
   if (!validationId) {
     throw new Error('Missing validationId in webhook data');
   }
-  
+
   if (!status) {
     throw new Error('Missing status in webhook data');
   }
 
-  // Update the validation record in Supabase
   const { updateValidationResult } = await import('./database');
 
-  return await updateValidationResult(
+  return updateValidationResult(
     validationId,
     status === 'completed' ? 'completed' : 'failed',
     resultSummary,
@@ -115,4 +216,3 @@ export async function handleN8NWebhook(webhookData: any) {
     executionId
   );
 }
-//chane vice versa

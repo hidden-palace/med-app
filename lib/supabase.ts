@@ -1,4 +1,4 @@
-﻿import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
 let cachedClient: SupabaseClient | null = null
 
@@ -79,7 +79,7 @@ export interface ValidationHistory {
   file_type: string
   state: string
   region: string
-  status: 'processing' | 'completed' | 'failed'
+  status: 'processing' | 'completed' | 'failed' | 'archived'
   result_summary?: string
   result_details?: any
   compliance_summary?: string | null

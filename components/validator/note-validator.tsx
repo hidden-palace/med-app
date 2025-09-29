@@ -73,7 +73,6 @@ const STATE_TO_REGION: Record<string, string> = {
   'West Virginia': 'Northeast'
 };
 
-const N8N_PLACEHOLDER_URL = 'https://your-n8n-instance.com/webhook/validate-note';
 
 export function NoteValidator({ userId }: NoteValidatorProps) {
   const [selectedState, setSelectedState] = useState<string>('');
@@ -82,9 +81,6 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
   const [recentValidations, setRecentValidations] = useState<ValidationHistory[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const n8nWebhookUrl = process.env.NEXT_PUBLIC_N8N_WEBHOOK_URL;
-  const isValidationServiceConfigured =
-    !!n8nWebhookUrl && n8nWebhookUrl !== N8N_PLACEHOLDER_URL;
 
   const loadRecentValidations = useCallback(async () => {
     try {
@@ -162,30 +158,6 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
         uploadedFileUrl
       );
       console.log('Validation record created:', validationRecord.id);
-
-      if (!isValidationServiceConfigured) {
-        const failureSummary = 'Validation service is not configured.';
-
-        try {
-          const failedRecord = await updateValidationResult(
-            validationRecord.id,
-            'failed',
-            failureSummary,
-            { error: failureSummary }
-          );
-
-          if (failedRecord) {
-            setValidationResults(failedRecord);
-          }
-        } catch (updateError) {
-          console.error('Error marking validation as failed:', updateError);
-        }
-
-        setErrorMessage('Validation service is not configured. Please contact an administrator.');
-        setIsValidating(false);
-        await loadRecentValidations();
-        return;
-      }
 
       console.log('Sending to N8N for processing...');
       const n8nResponse = await sendToN8N({
@@ -405,3 +377,4 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
     </div>
   );
 }
+
