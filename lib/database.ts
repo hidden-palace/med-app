@@ -622,11 +622,11 @@ export async function getUserCourseProgress(userId: string) {
 
     const modulesByCourse = new Map<string, Module[]>()
 
-    for (const module of (modulesResult.data ?? []) as Module[]) {
-      if (!modulesByCourse.has(module.course_id)) {
-        modulesByCourse.set(module.course_id, [])
+    for (const moduleRow of (modulesResult.data ?? []) as Module[]) {
+      if (!modulesByCourse.has(moduleRow.course_id)) {
+        modulesByCourse.set(moduleRow.course_id, [])
       }
-      modulesByCourse.get(module.course_id)!.push(module)
+      modulesByCourse.get(moduleRow.course_id)!.push(moduleRow)
     }
 
     for (const moduleList of modulesByCourse.values()) {
