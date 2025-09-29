@@ -135,7 +135,7 @@ function resolveTriggerEndpoint(): string {
   }
 
   const trimmedBaseUrl = baseUrl.replace(/\/+$/, '');
-  const trimmedBaseUrl = baseUrl.replace(/\/+$/, '');
+  return `${trimmedBaseUrl}/api/n8n/trigger`;
 }
 
 export async function sendToN8N(
@@ -167,12 +167,11 @@ export async function sendToN8N(
     console.warn('Unable to parse proxy response as JSON:', error);
   }
 
-  const payloadSuccess =
-    !!(
-      payload &&
+  const payloadSuccess = Boolean(
+    payload &&
       Object.prototype.hasOwnProperty.call(payload, 'success') &&
-      Boolean((payload as { success?: unknown }).success)
-    );
+      (payload as { success?: unknown }).success
+  );
 
   if (!response.ok || !payloadSuccess) {
     const rawError =
@@ -188,7 +187,11 @@ export async function sendToN8N(
     throw new Error(errorMessage);
   }
 
-  if (payload && typeof (payload as { data?: unknown }).data === 'object' && (payload as { data?: unknown }).data) {
+  if (
+    payload &&
+    typeof (payload as { data?: unknown }).data === 'object' &&
+    (payload as { data?: unknown }).data
+  ) {
     const data = (payload as { data: Record<string, unknown> }).data;
     return {
       executionId: normalizeExecutionId((data as { executionId?: unknown }).executionId),
@@ -199,7 +202,7 @@ export async function sendToN8N(
 
   const fallbackMessage =
     payload && typeof (payload as { message?: unknown }).message === 'string'
-      ? ((payload as { message: string }).message)
+      ? (payload as { message: string }).message
       : undefined;
 
   return buildDefaultResponse(fallbackMessage);
