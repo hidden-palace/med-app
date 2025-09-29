@@ -22,6 +22,42 @@ function ensureSupabaseClient(): SupabaseClient {
   return cachedClient
 }
 
+
+let cachedAdminClient: SupabaseClient | null = null
+
+function ensureSupabaseAdminClient(): SupabaseClient {
+  if (cachedAdminClient) {
+    return cachedAdminClient
+  }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+  if (!supabaseUrl) {
+    throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL environment variable')
+  }
+
+  if (!serviceRoleKey) {
+    throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY environment variable')
+  }
+
+  cachedAdminClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  })
+
+  return cachedAdminClient
+}
+
+export const getSupabaseAdminClient = (): SupabaseClient => {
+  if (typeof window !== 'undefined') {
+    throw new Error('getSupabaseAdminClient can only be used on the server')
+  }
+
+  return ensureSupabaseAdminClient()
+}
 export const getSupabaseClient = (): SupabaseClient => ensureSupabaseClient()
 
 export const supabase = new Proxy({} as SupabaseClient, {

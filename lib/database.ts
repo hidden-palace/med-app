@@ -1,5 +1,5 @@
+import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { supabase } from './supabase'
-import type { User } from '@supabase/supabase-js'
 import type { Course, Module, UserProgress, ValidationHistory, RecentActivity, Profile } from './supabase'
 
 export class ValidationRecordNotFoundError extends Error {
@@ -388,37 +388,76 @@ export async function updateValidationResult(
   status: 'completed' | 'failed',
   resultSummary?: string,
   resultDetails?: any,
-  n8nExecutionId?: string
+  n8nExecutionId?: string,
+  client: SupabaseClient = supabase
 ) {
   const normalized = normalizeValidationPayloadForStorage(resultDetails, resultSummary ?? null);
 
-  const updatePayload: Record<string, unknown> = {
+  const basePayload: Record<string, unknown> = {
     status,
     result_summary: resultSummary ?? normalized.complianceSummary,
-    compliance_summary: normalized.complianceSummary ?? resultSummary ?? null,
     result_details: normalized.structuredDetails ?? null,
     n8n_execution_id: n8nExecutionId ?? null,
     updated_at: new Date().toISOString(),
   };
 
+  const extendedPayload: Record<string, unknown> = {
+    ...basePayload,
+  };
+
+  if (normalized.complianceSummary !== null && normalized.complianceSummary !== undefined) {
+    extendedPayload.compliance_summary = normalized.complianceSummary;
+  }
+
   if (normalized.overallScore !== null) {
-    updatePayload.overall_score = normalized.overallScore;
+    extendedPayload.overall_score = normalized.overallScore;
   }
 
   if (normalized.lcdResults !== null) {
-    updatePayload.lcd_results = normalized.lcdResults;
+    extendedPayload.lcd_results = normalized.lcdResults;
   }
 
   if (normalized.recommendations !== null) {
-    updatePayload.recommendations = normalized.recommendations;
+    extendedPayload.recommendations = normalized.recommendations;
   }
 
-  const { data, error } = await supabase
-    .from('validation_history')
-    .update(updatePayload)
-    .eq('id', validationId)
-    .select()
-    .maybeSingle();
+  const applyUpdate = async (payload: Record<string, unknown>) => {
+    return client
+      .from('validation_history')
+      .update(payload)
+      .eq('id', validationId)
+      .select()
+      .maybeSingle();
+  };
+
+  let { data, error } = await applyUpdate(extendedPayload);
+
+  const shouldRetryWithBasePayload = (err: unknown) => {
+    if (!err || typeof err !== 'object') {
+      return false;
+    }
+
+    const { code, message } = err as { code?: string; message?: string };
+    if (code === '42703') {
+      return true;
+    }
+
+    if (!message) {
+      return false;
+    }
+
+    const normalizedMessage = message.toLowerCase();
+    return normalizedMessage.includes('column') && normalizedMessage.includes('does not exist');
+  };
+
+  if (error && shouldRetryWithBasePayload(error)) {
+    console.warn('updateValidationResult falling back to legacy payload due to missing columns', {
+      error,
+      validationId,
+    });
+
+    ({ data, error } = await applyUpdate(basePayload));
+  }
 
   if (error && (error as { code?: string }).code !== 'PGRST116') {
     throw error;
@@ -429,17 +468,6 @@ export async function updateValidationResult(
   }
 
   return data as ValidationHistory;
-}
-
-
-const VALIDATION_STORAGE_BUCKET =
-  process.env.NEXT_PUBLIC_SUPABASE_VALIDATION_BUCKET?.trim() || 'validation-notes'
-
-export type DashboardStats = {
-  totalCourses: number
-  completedModules: number
-  totalValidations: number
-  studyHours: string
 }
 
 export type AdminActionResult = {
@@ -1101,3 +1129,4 @@ export async function archiveValidationRecord(validationId: string) {
 
   return data as ValidationHistory
 }
+

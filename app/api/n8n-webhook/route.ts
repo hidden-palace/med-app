@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { handleN8NWebhook } from '@/lib/n8n-client';
 import { updateValidationResult } from '@/lib/database';
+import { getSupabaseAdminClient } from '@/lib/supabase';
 
 export async function POST(request: NextRequest) {
   try {
@@ -47,14 +47,16 @@ export async function POST(request: NextRequest) {
     } = webhookData;
     
     // Update the validation record directly
+    const supabaseAdmin = getSupabaseAdminClient();
+
     const result = await updateValidationResult(
       validationId,
       status === 'completed' ? 'completed' : 'failed',
       resultSummary,
       resultDetails,
-      executionId
+      executionId,
+      supabaseAdmin
     );
-    
     console.log('Validation record updated successfully:', result.id);
     
     return NextResponse.json({ 
@@ -74,3 +76,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+
