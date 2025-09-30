@@ -219,10 +219,6 @@ export function Dashboard({
     return `${diffInDays} days ago`;
   };
 
-  const handleContinueLearning = () => {
-    onNavigateToLearning?.();
-  };
-
   // Get top 3 courses for progress display
   const topCoursesForProgress = userCourseProgress
     .slice()
