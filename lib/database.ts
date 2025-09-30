@@ -17,6 +17,50 @@ type NormalizedValidationStorage = {
   recommendations: any[] | null;
 };
 
+function normalizeSupabaseError(error: unknown, fallbackMessage: string): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+
+  if (error && typeof error === 'object') {
+    const { message, details, hint, code, status } = error as {
+      message?: unknown;
+      details?: unknown;
+      hint?: unknown;
+      code?: unknown;
+      status?: unknown;
+    };
+
+    const parts = [message, details, hint]
+      .map((value) => (typeof value === 'string' ? value.trim() : ''))
+      .filter(Boolean);
+
+    const normalizedMessage = parts.length > 0 ? parts.join(' | ') : fallbackMessage;
+
+    const normalizedError = new Error(normalizedMessage);
+
+    if (typeof code === 'string' || typeof code === 'number') {
+      (normalizedError as { code?: string | number }).code = code;
+    }
+
+    if (typeof status === 'number') {
+      (normalizedError as { status?: number }).status = status;
+    }
+
+    if (typeof details !== 'undefined' && typeof details !== 'string') {
+      (normalizedError as { details?: unknown }).details = details;
+    }
+
+    if (typeof hint === 'string' && hint.trim()) {
+      (normalizedError as { hint?: string }).hint = hint.trim();
+    }
+
+    return normalizedError;
+  }
+
+  return new Error(fallbackMessage);
+}
+
 function normalizeValidationPayloadForStorage(
   resultDetails: unknown,
   fallbackSummary?: string | null
@@ -460,10 +504,10 @@ export async function updateValidationResult(
   }
 
   if (error && (error as { code?: string }).code !== 'PGRST116') {
-    throw error;
+    throw normalizeSupabaseError(error, 'Failed to update validation record');
   }
 
-  if (!data) {
+  if ((error as { code?: string })?.code === 'PGRST116' || !data) {
     throw new ValidationRecordNotFoundError(validationId);
   }
 
