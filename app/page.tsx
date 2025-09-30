@@ -1,31 +1,87 @@
-'use client';
+"use client";
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Sidebar } from '@/components/layout/sidebar';
-import { Header } from '@/components/layout/header';
-import { Dashboard } from '@/components/dashboard/dashboard';
-import { LearningModule } from '@/components/learning/learning-module';
-import { NoteValidator } from '@/components/validator/note-validator';
-import { AdminPanel } from '@/components/admin/admin-panel';
-import { AuthForm } from '@/components/auth/auth-form';
-import { supabase } from '@/lib/supabase';
-import { getUserProfile, updateProfile } from '@/lib/database';
-import type { User, AuthChangeEvent } from '@supabase/supabase-js';
-import type { Profile } from '@/lib/supabase';
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Sidebar } from "@/components/layout/sidebar";
+import { Header } from "@/components/layout/header";
+import { Dashboard } from "@/components/dashboard/dashboard";
+import { LearningModule } from "@/components/learning/learning-module";
+import { NoteValidator } from "@/components/validator/note-validator";
+import { AdminPanel } from "@/components/admin/admin-panel";
+import { AuthForm } from "@/components/auth/auth-form";
+import { supabase } from "@/lib/supabase";
+import { getUserProfile, updateProfile } from "@/lib/database";
+import type { User, AuthChangeEvent } from "@supabase/supabase-js";
+import type { Profile } from "@/lib/supabase";
 
-type ActiveView = 'dashboard' | 'learning' | 'validator' | 'admin';
+type ActiveView = "dashboard" | "learning" | "validator" | "admin";
 
 export default function Home() {
-  const [activeView, setActiveView] = useState<ActiveView>('dashboard');
+  const [activeView, setActiveView] = useState<ActiveView>("dashboard");
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [authErrorMessage, setAuthErrorMessage] = useState<string | null>(null);
 
   const lastAdminCheckUserIdRef = useRef<string | null>(null);
   const adminCheckPromiseRef = useRef<Promise<boolean> | null>(null);
   const adminStatusRef = useRef(false);
   const profileRef = useRef<Profile | null>(null);
+  const currentSessionHashRef = useRef<string | null>(null);
+
+  const syncCurrentSessionHash = useCallback(
+    async (refreshToken: string | null | undefined) => {
+      if (!refreshToken) {
+        currentSessionHashRef.current = null;
+        return null;
+      }
+
+      if (typeof crypto === "undefined" || !crypto?.subtle) {
+        currentSessionHashRef.current = null;
+        return null;
+      }
+
+      try {
+        const encoded = new TextEncoder().encode(refreshToken);
+        const digest = await crypto.subtle.digest("SHA-256", encoded);
+        const hash = Array.from(new Uint8Array(digest))
+          .map((byte) => byte.toString(16).padStart(2, "0"))
+          .join("");
+
+        currentSessionHashRef.current = hash;
+        return hash;
+      } catch (error) {
+        console.error("Failed to hash refresh token:", error);
+        currentSessionHashRef.current = null;
+        return null;
+      }
+    },
+    [],
+  );
+
+  const handleInactiveSignOut = useCallback(async (message?: string) => {
+    setAuthErrorMessage(
+      message ??
+        "Your account has been deactivated. Please contact an administrator to restore access.",
+    );
+
+    currentSessionHashRef.current = null;
+    setProfile(null);
+    profileRef.current = null;
+    setIsAdmin(false);
+    adminStatusRef.current = false;
+    lastAdminCheckUserIdRef.current = null;
+    adminCheckPromiseRef.current = null;
+
+    try {
+      await supabase.auth.signOut();
+    } catch (signOutError) {
+      console.error("Error signing out inactive user:", signOutError);
+    } finally {
+      setUser(null);
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     adminStatusRef.current = isAdmin;
@@ -35,10 +91,60 @@ export default function Home() {
     profileRef.current = profile;
   }, [profile]);
 
+  useEffect(() => {
+    if (!user?.id) {
+      return;
+    }
+
+    const channel = supabase
+      .channel(`profile-status-${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "profiles",
+          filter: `id=eq.${user.id}`,
+        },
+        (payload) => {
+          const newStatus = (payload.new as { is_active?: boolean } | null)
+            ?.is_active;
+
+          if (newStatus === false) {
+            void handleInactiveSignOut(
+              "Your account has been deactivated. Please contact an administrator.",
+            );
+            return;
+          }
+
+          const newSessionHash = (
+            payload.new as { active_session_hash?: string } | null
+          )?.active_session_hash;
+          if (typeof newSessionHash === "string" && newSessionHash.length > 0) {
+            if (
+              currentSessionHashRef.current &&
+              currentSessionHashRef.current !== newSessionHash
+            ) {
+              void handleInactiveSignOut(
+                "You have been signed out because your account was used from another device. Please sign in again.",
+              );
+            } else if (!currentSessionHashRef.current) {
+              currentSessionHashRef.current = newSessionHash;
+            }
+          }
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, handleInactiveSignOut]);
+
   const checkAdminStatus = useCallback(
     async (
       userId: string | null | undefined,
-      options: { force?: boolean; fallbackUser?: User } = {}
+      options: { force?: boolean; fallbackUser?: User } = {},
     ): Promise<boolean> => {
       const { force = false, fallbackUser } = options;
 
@@ -51,7 +157,11 @@ export default function Home() {
         return false;
       }
 
-      if (!force && lastAdminCheckUserIdRef.current === userId && !adminCheckPromiseRef.current) {
+      if (
+        !force &&
+        lastAdminCheckUserIdRef.current === userId &&
+        !adminCheckPromiseRef.current
+      ) {
         setProfile(profileRef.current ?? null);
         return adminStatusRef.current;
       }
@@ -65,11 +175,22 @@ export default function Home() {
           let userProfile = await getUserProfile(userId);
 
           if (!userProfile && fallbackUser && force) {
-            const explicitEmail = typeof fallbackUser.email === 'string' ? fallbackUser.email : undefined;
+            const explicitEmail =
+              typeof fallbackUser.email === "string"
+                ? fallbackUser.email
+                : undefined;
             const metadataEmailValue = fallbackUser.user_metadata?.email;
-            const metadataEmail = typeof metadataEmailValue === 'string' ? metadataEmailValue : undefined;
-            const metadataNameValue = fallbackUser.user_metadata?.full_name ?? fallbackUser.user_metadata?.name;
-            const metadataName = typeof metadataNameValue === 'string' ? metadataNameValue : undefined;
+            const metadataEmail =
+              typeof metadataEmailValue === "string"
+                ? metadataEmailValue
+                : undefined;
+            const metadataNameValue =
+              fallbackUser.user_metadata?.full_name ??
+              fallbackUser.user_metadata?.name;
+            const metadataName =
+              typeof metadataNameValue === "string"
+                ? metadataNameValue
+                : undefined;
 
             const emailToUse = explicitEmail ?? metadataEmail;
             const nameToUse = metadataName ?? emailToUse;
@@ -85,13 +206,12 @@ export default function Home() {
               }
 
               try {
-                userProfile = await updateProfile(
-                  userId,
-                  profileUpdates,
-                  { fallbackUser, createIfMissing: true }
-                );
+                userProfile = await updateProfile(userId, profileUpdates, {
+                  fallbackUser,
+                  createIfMissing: true,
+                });
               } catch (profileError) {
-                console.error('Error ensuring profile exists:', profileError);
+                console.error("Error ensuring profile exists:", profileError);
               }
             }
           }
@@ -100,17 +220,25 @@ export default function Home() {
             userProfile = await getUserProfile(userId);
           }
 
+          if (userProfile && userProfile.is_active === false) {
+            await handleInactiveSignOut(
+              "Your account has been deactivated. Please contact an administrator.",
+            );
+            return false;
+          }
+
+          setAuthErrorMessage(null);
           setProfile(userProfile ?? null);
           profileRef.current = userProfile ?? null;
 
-          const adminStatus = userProfile?.role === 'admin';
+          const adminStatus = userProfile?.role === "admin";
           setIsAdmin(adminStatus);
           adminStatusRef.current = adminStatus;
           lastAdminCheckUserIdRef.current = userId;
 
           return adminStatus;
         } catch (error) {
-          console.error('Error checking admin status:', error);
+          console.error("Error checking admin status:", error);
           setProfile(null);
           profileRef.current = null;
           setIsAdmin(false);
@@ -125,7 +253,7 @@ export default function Home() {
       adminCheckPromiseRef.current = promise;
       return promise;
     },
-    []
+    [handleInactiveSignOut],
   );
 
   useEffect(() => {
@@ -150,11 +278,16 @@ export default function Home() {
           return;
         }
 
+        await syncCurrentSessionHash(session?.refresh_token ?? null);
+
         const currentUser = session?.user ?? null;
         setUser(currentUser);
 
         if (currentUser) {
-          void checkAdminStatus(currentUser.id, { force: true, fallbackUser: currentUser });
+          void checkAdminStatus(currentUser.id, {
+            force: true,
+            fallbackUser: currentUser,
+          });
         } else {
           setIsAdmin(false);
           setProfile(null);
@@ -163,7 +296,7 @@ export default function Home() {
           lastAdminCheckUserIdRef.current = null;
         }
       } catch (error) {
-        console.error('Error initializing auth:', error);
+        console.error("Error initializing auth:", error);
         if (isActive) {
           setUser(null);
           setProfile(null);
@@ -179,7 +312,12 @@ export default function Home() {
 
     initializeAuth();
 
-    const adminCheckEvents: AuthChangeEvent[] = ['INITIAL_SESSION', 'SIGNED_IN', 'TOKEN_REFRESHED', 'USER_UPDATED'];
+    const adminCheckEvents: AuthChangeEvent[] = [
+      "INITIAL_SESSION",
+      "SIGNED_IN",
+      "TOKEN_REFRESHED",
+      "USER_UPDATED",
+    ];
 
     const {
       data: { subscription },
@@ -187,6 +325,8 @@ export default function Home() {
       if (!isActive) {
         return;
       }
+
+      await syncCurrentSessionHash(session?.refresh_token ?? null);
 
       const currentUser = session?.user ?? null;
       setUser(currentUser);
@@ -205,20 +345,26 @@ export default function Home() {
       markAuthReady();
 
       if (adminCheckEvents.includes(event)) {
-        if (event === 'SIGNED_IN') {
+        if (event === "SIGNED_IN") {
           updateProfile(
             currentUser.id,
             {
               last_sign_in_at: new Date().toISOString(),
             },
-            { fallbackUser: currentUser }
+            { fallbackUser: currentUser },
           ).catch((updateError) => {
-            console.error('Error updating last sign in time:', updateError);
+            console.error("Error updating last sign in time:", updateError);
           });
         }
 
-        const shouldForceCheck = event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION';
-        void checkAdminStatus(currentUser.id, { force: shouldForceCheck, fallbackUser: currentUser });
+        const shouldForceCheck =
+          event === "SIGNED_IN" ||
+          event === "USER_UPDATED" ||
+          event === "INITIAL_SESSION";
+        void checkAdminStatus(currentUser.id, {
+          force: shouldForceCheck,
+          fallbackUser: currentUser,
+        });
       }
     });
 
@@ -227,12 +373,14 @@ export default function Home() {
       subscription.unsubscribe();
       adminCheckPromiseRef.current = null;
     };
-  }, [checkAdminStatus]);
+  }, [checkAdminStatus, syncCurrentSessionHash]);
 
   const handleLogout = useCallback(async () => {
+    currentSessionHashRef.current = null;
     setUser(null);
     setProfile(null);
     setIsAdmin(false);
+    setAuthErrorMessage(null);
     adminStatusRef.current = false;
     profileRef.current = null;
     lastAdminCheckUserIdRef.current = null;
@@ -241,46 +389,73 @@ export default function Home() {
     try {
       await supabase.auth.signOut();
     } catch (error) {
-      console.error('Error signing out:', error);
+      console.error("Error signing out:", error);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   const handleNavigateToLearning = () => {
-    setActiveView('learning');
+    setActiveView("learning");
   };
 
   const renderActiveView = () => {
     const userId = user?.id || null;
 
     switch (activeView) {
-      case 'dashboard':
-        return <Dashboard userId={userId} onNavigateToLearning={handleNavigateToLearning} />;
-      case 'learning':
+      case "dashboard":
+        return (
+          <Dashboard
+            userId={userId}
+            onNavigateToLearning={handleNavigateToLearning}
+          />
+        );
+      case "learning":
         return <LearningModule userId={userId} />;
-      case 'validator':
+      case "validator":
         return <NoteValidator userId={userId} />;
-      case 'admin':
+      case "admin":
         if (!isAdmin) {
           return (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
                 <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <svg className="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L4.268 18.5c-.77.833.192 2.5 1.732 2.5z" />
+                  <svg
+                    className="w-8 h-8 text-red-600"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L4.268 18.5c-.77.833.192 2.5 1.732 2.5z"
+                    />
                   </svg>
                 </div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">Access Denied</h3>
-                <p className="text-gray-600">You don&apos;t have permission to access the admin panel.</p>
-                <p className="text-sm text-gray-500 mt-2">Please contact an administrator if you believe this is an error.</p>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                  Access Denied
+                </h3>
+                <p className="text-gray-600">
+                  You don&apos;t have permission to access the admin panel.
+                </p>
+                <p className="text-sm text-gray-500 mt-2">
+                  Please contact an administrator if you believe this is an
+                  error.
+                </p>
               </div>
             </div>
           );
         }
         return <AdminPanel userId={userId} />;
       default:
-        return <Dashboard userId={userId} onNavigateToLearning={handleNavigateToLearning} />;
+        return (
+          <Dashboard
+            userId={userId}
+            onNavigateToLearning={handleNavigateToLearning}
+          />
+        );
     }
   };
 
@@ -296,17 +471,32 @@ export default function Home() {
   }
 
   if (!user) {
-    return <AuthForm />;
+    return (
+      <AuthForm
+        initialError={authErrorMessage}
+        onInitialErrorClear={() => setAuthErrorMessage(null)}
+      />
+    );
   }
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
-      <Sidebar activeView={activeView} onViewChange={setActiveView} isAdmin={isAdmin} />
+      <Sidebar
+        activeView={activeView}
+        onViewChange={setActiveView}
+        isAdmin={isAdmin}
+      />
       <div className="flex-1 flex flex-col min-w-0">
-        <Header activeView={activeView} user={user} profile={profile} onLogout={handleLogout} />
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6">{renderActiveView()}</main>
+        <Header
+          activeView={activeView}
+          user={user}
+          profile={profile}
+          onLogout={handleLogout}
+        />
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6">
+          {renderActiveView()}
+        </main>
       </div>
     </div>
   );
 }
-
