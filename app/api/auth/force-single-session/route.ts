@@ -149,15 +149,27 @@ export async function POST(request: NextRequest) {
     const tokensToRevoke: Array<{ token: AdminRefreshToken; index: number }> =
       [];
 
+    let activeTokenHash: string | null = refreshTokenHash ?? null;
+
     refreshTokens.forEach((token, index) => {
+      const matchesSessionId =
+        sessionId && token.session_id && token.session_id === sessionId;
+      const matchesHash =
+        refreshTokenHash && token.token && token.token === refreshTokenHash;
+
       const shouldKeep =
-        (sessionId && token.session_id && token.session_id === sessionId) ||
-        (refreshTokenHash && token.token && token.token === refreshTokenHash) ||
+        matchesSessionId ||
+        matchesHash ||
         (!sessionId && !refreshTokenHash && token.current === true);
 
-      if (!shouldKeep) {
-        tokensToRevoke.push({ token, index });
+      if (shouldKeep) {
+        if (!activeTokenHash && token.token) {
+          activeTokenHash = token.token;
+        }
+        return;
       }
+
+      tokensToRevoke.push({ token, index });
     });
 
     if (
@@ -174,9 +186,16 @@ export async function POST(request: NextRequest) {
         if (revokeIndex >= 0) {
           tokensToRevoke.splice(revokeIndex, 1);
         }
+        const currentToken = refreshTokens[currentIndex];
+        if (!activeTokenHash && currentToken?.token) {
+          activeTokenHash = currentToken.token;
+        }
       }
       if (tokensToRevoke.length === refreshTokens.length) {
-        tokensToRevoke.pop();
+        const preserved = tokensToRevoke.pop();
+        if (preserved && preserved.token?.token && !activeTokenHash) {
+          activeTokenHash = preserved.token.token;
+        }
       }
     }
 
@@ -203,27 +222,25 @@ export async function POST(request: NextRequest) {
       }),
     );
 
-    if (refreshTokenHash) {
-      const supabaseAdminClient = createClient(supabaseUrl, serviceRoleKey, {
-        auth: {
-          persistSession: false,
-          autoRefreshToken: false,
-        },
-      });
+    const supabaseAdminClient = createClient(supabaseUrl, serviceRoleKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
 
-      const { error: updateError } = await supabaseAdminClient
-        .from("profiles")
-        .update({
-          active_session_hash: refreshTokenHash,
-          active_session_updated_at: new Date().toISOString(),
-        })
-        .eq("id", payload.userId);
+    const { error: updateError } = await supabaseAdminClient
+      .from("profiles")
+      .update({
+        active_session_hash: activeTokenHash ?? null,
+        active_session_updated_at: new Date().toISOString(),
+      })
+      .eq("id", payload.userId);
 
-      if (updateError) {
-        throw new Error(
-          `Failed to record active session: ${updateError.message}`,
-        );
-      }
+    if (updateError) {
+      throw new Error(
+        `Failed to record active session: ${updateError.message}`,
+      );
     }
 
     return new NextResponse(null, { status: 204 });

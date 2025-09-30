@@ -145,6 +145,8 @@ export interface Profile {
   is_active: boolean
   role: 'user' | 'admin'
   last_sign_in_at?: string
+  active_session_hash?: string | null
+  active_session_updated_at?: string | null
   created_at: string
   updated_at: string
 }

@@ -132,6 +132,19 @@ export default function Home() {
               currentSessionHashRef.current = newSessionHash;
             }
           }
+
+          if (payload.new && typeof payload.new === "object") {
+            const updatedProfile = {
+              ...(profileRef.current ?? {}),
+              ...(payload.new as Record<string, unknown>),
+            } as Profile;
+
+            profileRef.current = updatedProfile;
+
+            setProfile((prev) =>
+              prev && prev.id === user?.id ? (updatedProfile as Profile) : prev,
+            );
+          }
         },
       )
       .subscribe();
@@ -230,6 +243,8 @@ export default function Home() {
           setAuthErrorMessage(null);
           setProfile(userProfile ?? null);
           profileRef.current = userProfile ?? null;
+          currentSessionHashRef.current =
+            userProfile?.active_session_hash ?? null;
 
           const adminStatus = userProfile?.role === "admin";
           setIsAdmin(adminStatus);
