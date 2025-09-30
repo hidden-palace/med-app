@@ -1,9 +1,9 @@
-import './globals.css';
-import type { Metadata } from 'next';
+import "./globals.css";
+import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: 'MedLearn Platform',
-  description: 'Comprehensive learning platform with note validation',
+  title: "UptoShift Platform",
+  description: "Comprehensive learning platform with note validation",
 };
 
 export default function RootLayout({

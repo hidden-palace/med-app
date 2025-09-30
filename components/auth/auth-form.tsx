@@ -184,7 +184,7 @@ export function AuthForm({
               <BookOpen className="w-6 h-6 text-white" />
             </div>
           </div>
-          <h1 className="text-3xl font-bold text-gray-900">MUptoShift</h1>
+          <h1 className="text-3xl font-bold text-gray-900">UptoShift</h1>
           <p className="text-gray-600 mt-2">
             Comprehensive learning platform with note validation
           </p>
@@ -381,7 +381,7 @@ export function AuthForm({
         </Card>
 
         <div className="mt-8 text-center text-sm text-gray-500">
-          <p>© 2025 MedLearn Platform. All rights reserved.</p>
+          <p>Copyright 2025 UptoShift Platform. All rights reserved.</p>
         </div>
       </div>
     </div>
