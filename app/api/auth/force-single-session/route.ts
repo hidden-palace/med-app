@@ -149,7 +149,8 @@ export async function POST(request: NextRequest) {
     const tokensToRevoke: Array<{ token: AdminRefreshToken; index: number }> =
       [];
 
-    let activeTokenHash: string | null = refreshTokenHash ?? null;
+    let activeTokenHash: string | null =
+      refreshTokenHash ?? (sessionId ? `session:${sessionId}` : null);
 
     refreshTokens.forEach((token, index) => {
       const matchesSessionId =
@@ -163,8 +164,14 @@ export async function POST(request: NextRequest) {
         (!sessionId && !refreshTokenHash && token.current === true);
 
       if (shouldKeep) {
-        if (!activeTokenHash && token.token) {
-          activeTokenHash = token.token;
+        if (!activeTokenHash) {
+          if (matchesHash && refreshTokenHash) {
+            activeTokenHash = refreshTokenHash;
+          } else if (matchesSessionId && sessionId) {
+            activeTokenHash = `session:${sessionId}`;
+          } else if (token.token) {
+            activeTokenHash = token.token;
+          }
         }
         return;
       }
@@ -187,14 +194,22 @@ export async function POST(request: NextRequest) {
           tokensToRevoke.splice(revokeIndex, 1);
         }
         const currentToken = refreshTokens[currentIndex];
-        if (!activeTokenHash && currentToken?.token) {
-          activeTokenHash = currentToken.token;
+        if (!activeTokenHash) {
+          activeTokenHash =
+            currentToken?.token ??
+            (currentToken?.session_id
+              ? `session:${currentToken.session_id}`
+              : null);
         }
       }
       if (tokensToRevoke.length === refreshTokens.length) {
         const preserved = tokensToRevoke.pop();
-        if (preserved && preserved.token?.token && !activeTokenHash) {
-          activeTokenHash = preserved.token.token;
+        if (!activeTokenHash && preserved) {
+          activeTokenHash =
+            preserved.token?.token ??
+            (preserved.token?.session_id
+              ? `session:${preserved.token.session_id}`
+              : null);
         }
       }
     }

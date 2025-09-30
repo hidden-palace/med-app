@@ -293,7 +293,7 @@ export default function Home() {
           return;
         }
 
-        await syncCurrentSessionHash(session?.refresh_token ?? null);
+        await syncCurrentSessionHash(session);
 
         const currentUser = session?.user ?? null;
         setUser(currentUser);
@@ -341,7 +341,7 @@ export default function Home() {
         return;
       }
 
-      await syncCurrentSessionHash(session?.refresh_token ?? null);
+      await syncCurrentSessionHash(session);
 
       const currentUser = session?.user ?? null;
       setUser(currentUser);
@@ -414,6 +414,14 @@ export default function Home() {
     setActiveView("learning");
   };
 
+  const handleNavigateToValidator = () => {
+    setActiveView("validator");
+  };
+
+  const handleNavigateToReports = () => {
+    setActiveView("admin");
+  };
+
   const renderActiveView = () => {
     const userId = user?.id || null;
 
@@ -423,6 +431,9 @@ export default function Home() {
           <Dashboard
             userId={userId}
             onNavigateToLearning={handleNavigateToLearning}
+            onNavigateToValidator={handleNavigateToValidator}
+            onNavigateToReports={isAdmin ? handleNavigateToReports : undefined}
+            canViewReports={isAdmin}
           />
         );
       case "learning":
@@ -469,6 +480,9 @@ export default function Home() {
           <Dashboard
             userId={userId}
             onNavigateToLearning={handleNavigateToLearning}
+            onNavigateToValidator={handleNavigateToValidator}
+            onNavigateToReports={isAdmin ? handleNavigateToReports : undefined}
+            canViewReports={isAdmin}
           />
         );
     }
