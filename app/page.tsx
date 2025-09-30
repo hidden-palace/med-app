@@ -13,6 +13,8 @@ import { getUserProfile, updateProfile } from "@/lib/database";
 import type { User, AuthChangeEvent } from "@supabase/supabase-js";
 import type { Profile } from "@/lib/supabase";
 
+const SESSION_FINGERPRINT_KEY = "uptoshift-active-session";
+
 type ActiveView = "dashboard" | "learning" | "validator" | "admin";
 
 export default function Home() {
@@ -29,35 +31,20 @@ export default function Home() {
   const profileRef = useRef<Profile | null>(null);
   const currentSessionHashRef = useRef<string | null>(null);
 
-  const syncCurrentSessionHash = useCallback(
-    async (refreshToken: string | null | undefined) => {
-      if (!refreshToken) {
-        currentSessionHashRef.current = null;
-        return null;
-      }
+  const syncCurrentSessionHash = useCallback(() => {
+    if (typeof window === "undefined") {
+      currentSessionHashRef.current = null;
+      return null;
+    }
 
-      if (typeof crypto === "undefined" || !crypto?.subtle) {
-        currentSessionHashRef.current = null;
-        return null;
-      }
+    const stored = window.localStorage.getItem(SESSION_FINGERPRINT_KEY);
+    currentSessionHashRef.current = stored;
+    return stored;
+  }, []);
 
-      try {
-        const encoded = new TextEncoder().encode(refreshToken);
-        const digest = await crypto.subtle.digest("SHA-256", encoded);
-        const hash = Array.from(new Uint8Array(digest))
-          .map((byte) => byte.toString(16).padStart(2, "0"))
-          .join("");
-
-        currentSessionHashRef.current = hash;
-        return hash;
-      } catch (error) {
-        console.error("Failed to hash refresh token:", error);
-        currentSessionHashRef.current = null;
-        return null;
-      }
-    },
-    [],
-  );
+  useEffect(() => {
+    syncCurrentSessionHash();
+  }, [syncCurrentSessionHash]);
 
   const handleInactiveSignOut = useCallback(async (message?: string) => {
     setAuthErrorMessage(
@@ -66,6 +53,9 @@ export default function Home() {
     );
 
     currentSessionHashRef.current = null;
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(SESSION_FINGERPRINT_KEY);
+    }
     setProfile(null);
     profileRef.current = null;
     setIsAdmin(false);
@@ -129,8 +119,38 @@ export default function Home() {
                 "You have been signed out because your account was used from another device. Please sign in again.",
               );
             } else if (!currentSessionHashRef.current) {
+              const storedHash =
+                typeof window !== "undefined"
+                  ? window.localStorage.getItem(SESSION_FINGERPRINT_KEY)
+                  : null;
+
+              if (storedHash && storedHash !== newSessionHash) {
+                void handleInactiveSignOut(
+                  "You have been signed out because your account was used from another device. Please sign in again.",
+                );
+                return;
+              }
+
+              if (!storedHash) {
+                void handleInactiveSignOut(
+                  "You have been signed out because your account was used from another device. Please sign in again.",
+                );
+                return;
+              }
+
+              currentSessionHashRef.current = storedHash;
+            } else {
               currentSessionHashRef.current = newSessionHash;
             }
+
+            if (typeof window !== "undefined") {
+              window.localStorage.setItem(
+                SESSION_FINGERPRINT_KEY,
+                newSessionHash,
+              );
+            }
+          } else if (typeof window !== "undefined") {
+            window.localStorage.removeItem(SESSION_FINGERPRINT_KEY);
           }
 
           if (payload.new && typeof payload.new === "object") {
@@ -243,8 +263,20 @@ export default function Home() {
           setAuthErrorMessage(null);
           setProfile(userProfile ?? null);
           profileRef.current = userProfile ?? null;
-          currentSessionHashRef.current =
-            userProfile?.active_session_hash ?? null;
+
+          const activeSessionHash = userProfile?.active_session_hash ?? null;
+          currentSessionHashRef.current = activeSessionHash;
+
+          if (typeof window !== "undefined") {
+            if (activeSessionHash) {
+              window.localStorage.setItem(
+                SESSION_FINGERPRINT_KEY,
+                activeSessionHash,
+              );
+            } else {
+              window.localStorage.removeItem(SESSION_FINGERPRINT_KEY);
+            }
+          }
 
           const adminStatus = userProfile?.role === "admin";
           setIsAdmin(adminStatus);
@@ -293,7 +325,7 @@ export default function Home() {
           return;
         }
 
-        await syncCurrentSessionHash(session);
+        syncCurrentSessionHash();
 
         const currentUser = session?.user ?? null;
         setUser(currentUser);
@@ -341,7 +373,7 @@ export default function Home() {
         return;
       }
 
-      await syncCurrentSessionHash(session);
+      syncCurrentSessionHash();
 
       const currentUser = session?.user ?? null;
       setUser(currentUser);
@@ -392,6 +424,9 @@ export default function Home() {
 
   const handleLogout = useCallback(async () => {
     currentSessionHashRef.current = null;
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(SESSION_FINGERPRINT_KEY);
+    }
     setUser(null);
     setProfile(null);
     setIsAdmin(false);

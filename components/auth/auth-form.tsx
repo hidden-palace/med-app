@@ -20,6 +20,8 @@ import {
 import { supabase } from "@/lib/supabase";
 import type { AuthError } from "@supabase/supabase-js";
 
+const SESSION_FINGERPRINT_KEY = "uptoshift-active-session";
+
 interface AuthFormProps {
   onAuthStateChange?: (authenticated: boolean) => void;
   initialError?: string | null;
@@ -106,26 +108,55 @@ export function AuthForm({
       }
 
       if (signedInUser && accessToken) {
+        const sessionFingerprint =
+          typeof window !== "undefined" &&
+          typeof window.crypto !== "undefined" &&
+          typeof window.crypto.randomUUID === "function"
+            ? window.crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
         const payload = {
           userId: signedInUser.id,
           sessionId: sessionId ?? undefined,
           refreshToken: session?.refresh_token ?? undefined,
+          sessionFingerprint,
         };
 
-        void fetch("/api/auth/force-single-session", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
-          },
-          body: JSON.stringify(payload),
-        }).catch((err) => {
-          console.error("Failed to enforce single session:", err);
-        });
+        try {
+          const response = await fetch("/api/auth/force-single-session", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${accessToken}`,
+            },
+            body: JSON.stringify(payload),
+          });
+
+          if (!response.ok) {
+            throw new Error(
+              `Failed to enforce single session: ${response.status}`,
+            );
+          }
+
+          if (typeof window !== "undefined") {
+            window.localStorage.setItem(
+              SESSION_FINGERPRINT_KEY,
+              sessionFingerprint,
+            );
+          }
+        } catch (enforceError) {
+          console.error("Failed to enforce single session:", enforceError);
+          if (typeof window !== "undefined") {
+            window.localStorage.removeItem(SESSION_FINGERPRINT_KEY);
+          }
+        }
       }
 
       setSuccess("Successfully signed in!");
     } catch (error) {
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(SESSION_FINGERPRINT_KEY);
+      }
       const authError = error as AuthError;
       setError(authError.message || "An error occurred during sign in");
     } finally {

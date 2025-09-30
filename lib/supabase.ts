@@ -1,44 +1,45 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-let cachedClient: SupabaseClient | null = null
+let cachedClient: SupabaseClient | null = null;
 
 function ensureSupabaseClient(): SupabaseClient {
   if (cachedClient) {
-    return cachedClient
+    return cachedClient;
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl) {
-    throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL environment variable')
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL environment variable");
   }
 
   if (!supabaseAnonKey) {
-    throw new Error('Missing NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable')
+    throw new Error(
+      "Missing NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable",
+    );
   }
 
-  cachedClient = createClient(supabaseUrl, supabaseAnonKey)
-  return cachedClient
+  cachedClient = createClient(supabaseUrl, supabaseAnonKey);
+  return cachedClient;
 }
 
-
-let cachedAdminClient: SupabaseClient | null = null
+let cachedAdminClient: SupabaseClient | null = null;
 
 function ensureSupabaseAdminClient(): SupabaseClient {
   if (cachedAdminClient) {
-    return cachedAdminClient
+    return cachedAdminClient;
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!supabaseUrl) {
-    throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL environment variable')
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL environment variable");
   }
 
   if (!serviceRoleKey) {
-    throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY environment variable')
+    throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY environment variable");
   }
 
   cachedAdminClient = createClient(supabaseUrl, serviceRoleKey, {
@@ -46,107 +47,115 @@ function ensureSupabaseAdminClient(): SupabaseClient {
       persistSession: false,
       autoRefreshToken: false,
     },
-  })
+  });
 
-  return cachedAdminClient
+  return cachedAdminClient;
 }
 
 export const getSupabaseAdminClient = (): SupabaseClient => {
-  if (typeof window !== 'undefined') {
-    throw new Error('getSupabaseAdminClient can only be used on the server')
+  if (typeof window !== "undefined") {
+    throw new Error("getSupabaseAdminClient can only be used on the server");
   }
 
-  return ensureSupabaseAdminClient()
-}
-export const getSupabaseClient = (): SupabaseClient => ensureSupabaseClient()
+  return ensureSupabaseAdminClient();
+};
+export const getSupabaseClient = (): SupabaseClient => ensureSupabaseClient();
 
 export const supabase = new Proxy({} as SupabaseClient, {
   get: (_target, property, receiver) => {
-    const client = ensureSupabaseClient()
-    const value = Reflect.get(client as unknown as Record<PropertyKey, unknown>, property, receiver)
-    return typeof value === 'function'
+    const client = ensureSupabaseClient();
+    const value = Reflect.get(
+      client as unknown as Record<PropertyKey, unknown>,
+      property,
+      receiver,
+    );
+    return typeof value === "function"
       ? (value as (...args: unknown[]) => unknown).bind(client)
-      : value
+      : value;
   },
-}) as SupabaseClient
+}) as SupabaseClient;
 
 // Types for our database schema
 export interface Course {
-  id: string
-  title: string
-  description: string
-  thumbnail: string
-  created_at: string
-  updated_at: string
-  published: boolean
-  order_index: number
+  id: string;
+  title: string;
+  description: string;
+  thumbnail: string;
+  created_at: string;
+  updated_at: string;
+  published: boolean;
+  order_index: number;
 }
 
 export interface Module {
-  id: string
-  course_id: string
-  title: string
-  description: string
-  video_url: string
-  transcript: string
-  duration: string
-  order_index: number
-  published: boolean
-  created_at: string
-  updated_at: string
+  id: string;
+  course_id: string;
+  title: string;
+  description: string;
+  video_url: string;
+  transcript: string;
+  duration: string;
+  order_index: number;
+  published: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface UserProgress {
-  id: string
-  user_id: string
-  course_id: string
-  module_id: string
-  completed: boolean
-  last_position: number
-  completed_at?: string
-  created_at: string
-  updated_at: string
+  id: string;
+  user_id: string;
+  course_id: string;
+  module_id: string;
+  completed: boolean;
+  last_position: number;
+  completed_at?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ValidationHistory {
-  id: string
-  user_id: string
-  file_name: string
-  file_type: string
-  state: string
-  region: string
-  status: 'processing' | 'completed' | 'failed' | 'archived'
-  result_summary?: string
-  result_details?: any
-  compliance_summary?: string | null
-  overall_score?: number | null
-  lcd_results?: any[] | null
-  recommendations?: any[] | null
-  n8n_execution_id?: string
-  file_url?: string
-  created_at: string
-  updated_at: string
+  id: string;
+  user_id: string;
+  file_name: string;
+  file_type: string;
+  state: string;
+  region: string;
+  status: "processing" | "completed" | "failed" | "archived";
+  result_summary?: string;
+  result_details?: any;
+  compliance_summary?: string | null;
+  overall_score?: number | null;
+  lcd_results?: any[] | null;
+  recommendations?: any[] | null;
+  n8n_execution_id?: string;
+  file_url?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface RecentActivity {
-  id: string
-  user_id: string
-  activity_type: 'course_completed' | 'module_completed' | 'note_validated' | 'course_started'
-  title: string
-  description: string
-  metadata?: any
-  created_at: string
+  id: string;
+  user_id: string;
+  activity_type:
+    | "course_completed"
+    | "module_completed"
+    | "note_validated"
+    | "course_started";
+  title: string;
+  description: string;
+  metadata?: any;
+  created_at: string;
 }
 
 export interface Profile {
-  id: string
-  email: string
-  full_name: string
-  is_active: boolean
-  role: 'user' | 'admin'
-  last_sign_in_at?: string
-  active_session_hash?: string | null
-  active_session_updated_at?: string | null
-  created_at: string
-  updated_at: string
+  id: string;
+  email: string;
+  full_name: string;
+  is_active: boolean;
+  role: "user" | "admin";
+  last_sign_in_at?: string;
+  active_session_hash?: string | null;
+  active_session_updated_at?: string | null;
+  created_at: string;
+  updated_at: string;
 }

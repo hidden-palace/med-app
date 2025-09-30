@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 
 export const runtime = "nodejs";
 
@@ -8,6 +8,7 @@ type ForceSingleSessionPayload = {
   userId: string;
   sessionId?: string | null;
   refreshToken?: string | null;
+  sessionFingerprint?: string | null;
 };
 
 type AdminRefreshToken = {
@@ -149,9 +150,6 @@ export async function POST(request: NextRequest) {
     const tokensToRevoke: Array<{ token: AdminRefreshToken; index: number }> =
       [];
 
-    let activeTokenHash: string | null =
-      refreshTokenHash ?? (sessionId ? `session:${sessionId}` : null);
-
     refreshTokens.forEach((token, index) => {
       const matchesSessionId =
         sessionId && token.session_id && token.session_id === sessionId;
@@ -164,15 +162,6 @@ export async function POST(request: NextRequest) {
         (!sessionId && !refreshTokenHash && token.current === true);
 
       if (shouldKeep) {
-        if (!activeTokenHash) {
-          if (matchesHash && refreshTokenHash) {
-            activeTokenHash = refreshTokenHash;
-          } else if (matchesSessionId && sessionId) {
-            activeTokenHash = `session:${sessionId}`;
-          } else if (token.token) {
-            activeTokenHash = token.token;
-          }
-        }
         return;
       }
 
@@ -193,24 +182,9 @@ export async function POST(request: NextRequest) {
         if (revokeIndex >= 0) {
           tokensToRevoke.splice(revokeIndex, 1);
         }
-        const currentToken = refreshTokens[currentIndex];
-        if (!activeTokenHash) {
-          activeTokenHash =
-            currentToken?.token ??
-            (currentToken?.session_id
-              ? `session:${currentToken.session_id}`
-              : null);
-        }
       }
       if (tokensToRevoke.length === refreshTokens.length) {
-        const preserved = tokensToRevoke.pop();
-        if (!activeTokenHash && preserved) {
-          activeTokenHash =
-            preserved.token?.token ??
-            (preserved.token?.session_id
-              ? `session:${preserved.token.session_id}`
-              : null);
-        }
+        tokensToRevoke.pop();
       }
     }
 
@@ -237,6 +211,12 @@ export async function POST(request: NextRequest) {
       }),
     );
 
+    const sessionFingerprint =
+      typeof payload.sessionFingerprint === "string" &&
+      payload.sessionFingerprint.trim().length > 0
+        ? payload.sessionFingerprint.trim()
+        : randomUUID();
+
     const supabaseAdminClient = createClient(supabaseUrl, serviceRoleKey, {
       auth: {
         persistSession: false,
@@ -247,7 +227,7 @@ export async function POST(request: NextRequest) {
     const { error: updateError } = await supabaseAdminClient
       .from("profiles")
       .update({
-        active_session_hash: activeTokenHash ?? null,
+        active_session_hash: sessionFingerprint,
         active_session_updated_at: new Date().toISOString(),
       })
       .eq("id", payload.userId);
