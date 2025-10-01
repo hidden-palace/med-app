@@ -13,11 +13,7 @@ import {
   Users,
   Activity,
 } from "lucide-react";
-import {
-  getDashboardStats,
-  getRecentActivity,
-  getUserCourseProgress,
-} from "@/lib/database";
+import { supabase } from "@/lib/supabase";
 import type { RecentActivity } from "@/lib/supabase";
 
 interface DashboardProps {
@@ -27,6 +23,26 @@ interface DashboardProps {
   onNavigateToReports?: () => void;
   canViewReports?: boolean;
 }
+
+type DashboardOverviewResponse = {
+  stats: {
+    totalCourses: number;
+    completedModules: number;
+    totalValidations: number;
+    studyHours: string;
+  };
+  recentActivity: RecentActivity[];
+  courseProgress: Array<{
+    id: string;
+    title: string;
+    thumbnail: string | null;
+    order_index: number;
+    totalModules: number;
+    completedModulesCount: number;
+    progress: number;
+    isStarted: boolean;
+  }>;
+};
 
 export function Dashboard({
   userId,
@@ -86,30 +102,66 @@ export function Dashboard({
 
   // Define loadDashboardData using useCallback to ensure stable reference
   const loadDashboardData = useCallback(async () => {
-    // Early return if no authenticated user
     if (!userId) {
-      console.log("No authenticated user - skipping dashboard data load");
       setLoading(false);
       return;
     }
 
     try {
-      console.log("Loading dashboard data for user:", userId);
-      const [dashboardStats, activities, courseProgress] = await Promise.all([
-        getDashboardStats(userId),
-        getRecentActivity(userId, 4),
-        getUserCourseProgress(userId),
-      ]);
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
 
-      console.log("Dashboard stats received:", dashboardStats);
-      console.log("Recent activities received:", activities);
-      console.log("Course progress received:", courseProgress);
+      if (sessionError) {
+        throw sessionError;
+      }
+
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) {
+        throw new Error("No active session found");
+      }
+
+      const response = await fetch(`/api/dashboard/overview?activityLimit=4`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        let message = `Failed to load dashboard data (status ${response.status})`;
+        try {
+          const payload = await response.json();
+          if (payload && typeof payload.error === "string" && payload.error.trim().length > 0) {
+            message = payload.error;
+          } else if (payload && typeof payload.details === "string" && payload.details.trim().length > 0) {
+            message = payload.details;
+          }
+        } catch {
+          // Ignore response parsing errors.
+        }
+        throw new Error(message);
+      }
+
+      const payload = (await response.json()) as DashboardOverviewResponse | null;
+
+      const statsData = payload?.stats ?? {
+        totalCourses: 0,
+        completedModules: 0,
+        totalValidations: 0,
+        studyHours: "0 hrs",
+      };
+
+      const activities = Array.isArray(payload?.recentActivity)
+        ? payload!.recentActivity
+        : [];
+      const courses = Array.isArray(payload?.courseProgress)
+        ? payload!.courseProgress
+        : [];
 
       const completionRate =
-        dashboardStats.totalCourses > 0
+        statsData.totalCourses > 0
           ? Math.round(
-              (dashboardStats.completedModules /
-                Math.max(dashboardStats.totalCourses * 9, 1)) *
+              (statsData.completedModules /
+                Math.max(statsData.totalCourses * 9, 1)) *
                 100,
             )
           : 0;
@@ -117,21 +169,21 @@ export function Dashboard({
       setStats([
         {
           title: "Total Courses",
-          value: dashboardStats.totalCourses.toString(),
+          value: statsData.totalCourses.toString(),
           change: "",
           icon: BookOpen,
           color: "text-blue-600",
         },
         {
           title: "Notes Validated",
-          value: dashboardStats.totalValidations.toString(),
+          value: statsData.totalValidations.toString(),
           change: "",
           icon: FileCheck,
           color: "text-green-600",
         },
         {
           title: "Study Hours",
-          value: dashboardStats.studyHours,
+          value: statsData.studyHours,
           change: "",
           icon: Clock,
           color: "text-purple-600",
@@ -146,36 +198,40 @@ export function Dashboard({
       ]);
 
       setRecentActivity(activities);
-      setUserCourseProgress(courseProgress);
+      setUserCourseProgress(courses);
     } catch (error) {
       console.error("Error loading dashboard data:", error);
-      // Set empty stats on error instead of mock data
+      const statusMessage =
+        error instanceof Error && error.message
+          ? error.message
+          : "Error loading data";
+
       setStats([
         {
           title: "Total Courses",
           value: "0",
-          change: "Error loading data",
+          change: statusMessage,
           icon: BookOpen,
           color: "text-blue-600",
         },
         {
           title: "Notes Validated",
           value: "0",
-          change: "Error loading data",
+          change: statusMessage,
           icon: FileCheck,
           color: "text-green-600",
         },
         {
           title: "Study Hours",
           value: "0",
-          change: "Error loading data",
+          change: statusMessage,
           icon: Clock,
           color: "text-purple-600",
         },
         {
           title: "Completion Rate",
           value: "0%",
-          change: "Error loading data",
+          change: statusMessage,
           icon: Trophy,
           color: "text-orange-600",
         },

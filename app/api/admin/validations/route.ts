@@ -3,6 +3,9 @@ import { createClient } from "@supabase/supabase-js";
 import { getSupabaseAdminClient } from "@/lib/supabase";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+type ValidationStatusFilter = "all" | "completed" | "processing" | "failed" | "archived";
 
 function getRequiredEnv(name: string): string {
   const value = process.env[name];
@@ -36,6 +39,24 @@ function resolveLimit(value: string | null): number {
   }
 
   return Math.min(parsed, 200);
+}
+
+function normalizeStatusParam(value: string | null): ValidationStatusFilter {
+  if (!value) {
+    return "all";
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "completed" ||
+    normalized === "processing" ||
+    normalized === "failed" ||
+    normalized === "archived"
+  ) {
+    return normalized;
+  }
+
+  return "all";
 }
 
 export async function GET(request: NextRequest) {
@@ -90,7 +111,7 @@ export async function GET(request: NextRequest) {
 
     const url = new URL(request.url);
     const limit = resolveLimit(url.searchParams.get("limit"));
-    const statusParam = url.searchParams.get("status");
+    const statusFilter = normalizeStatusParam(url.searchParams.get("status"));
 
     let query = supabaseAdmin
       .from("validation_history")
@@ -98,8 +119,8 @@ export async function GET(request: NextRequest) {
       .order("created_at", { ascending: false })
       .limit(limit);
 
-    if (statusParam && statusParam.trim().length > 0 && statusParam !== "all") {
-      query = query.eq("status", statusParam.trim());
+    if (statusFilter !== "all") {
+      query = query.eq("status", statusFilter);
     }
 
     const { data, error } = await query;

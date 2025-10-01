@@ -50,6 +50,7 @@ import type { ValidationHistory, Profile } from "@/lib/supabase";
 type ValidationWithUser = ValidationHistory & {
   profiles: Pick<Profile, "full_name" | "email"> | null;
 };
+type ValidationStatusFilter = "all" | "completed" | "processing" | "failed" | "archived";
 
 interface ReportsOverviewProps {
   onStatsChange?: () => void;
@@ -90,7 +91,7 @@ export function ReportsOverview({ onStatsChange }: ReportsOverviewProps) {
   }, [error]);
 
   const loadValidations = useCallback(
-    async (shouldNotify = false) => {
+    async ({ shouldNotify = false, status }: { shouldNotify?: boolean; status?: ValidationStatusFilter } = {}) => {
       try {
         setLoading(true);
         setError(null);
@@ -106,7 +107,13 @@ export function ReportsOverview({ onStatsChange }: ReportsOverviewProps) {
           throw new Error("No active session found");
         }
 
-        const response = await fetch("/api/admin/validations?limit=50", {
+        const params = new URLSearchParams({ limit: "50" });
+        const normalizedStatus = status && status !== "all" ? status : null;
+        if (normalizedStatus) {
+          params.set("status", normalizedStatus);
+        }
+
+        const response = await fetch(`/api/admin/validations?${params.toString()}`, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
           },
@@ -128,7 +135,7 @@ export function ReportsOverview({ onStatsChange }: ReportsOverviewProps) {
           throw new Error(message);
         }
 
-        const payload = (await response.json()) as any;
+        const payload = (await response.json()) as { items?: ValidationWithUser[] } | ValidationWithUser[];
 
         const items: ValidationWithUser[] = Array.isArray(payload)
           ? payload
@@ -137,9 +144,9 @@ export function ReportsOverview({ onStatsChange }: ReportsOverviewProps) {
             : [];
 
         setValidations(items);
+        setFilteredValidations(items);
         setSuccess("Validation reports loaded successfully");
 
-        // Notify parent component about stats change
         if (shouldNotify && onStatsChange) {
           onStatsChange();
         }
@@ -210,8 +217,8 @@ export function ReportsOverview({ onStatsChange }: ReportsOverviewProps) {
   }, [dateFilter, searchTerm, statusFilter, validations]);
 
   useEffect(() => {
-    loadValidations(false);
-  }, [loadValidations]);
+    void loadValidations({ status: statusFilter });
+  }, [loadValidations, statusFilter]);
 
   useEffect(() => {
     filterValidations();
@@ -432,7 +439,7 @@ ${new Date().toLocaleString()}
           </p>
         </div>
 
-        <Button onClick={() => loadValidations(true)} variant="outline">
+        <Button onClick={() => void loadValidations({ shouldNotify: true, status: statusFilter })} variant="outline">
           <RefreshCw className="w-4 h-4 mr-2" />
           Refresh
         </Button>
@@ -765,9 +772,3 @@ ${new Date().toLocaleString()}
     </div>
   );
 }
-
-
-
-
-
-
