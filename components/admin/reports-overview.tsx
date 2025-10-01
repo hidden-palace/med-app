@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,11 +40,11 @@ import {
   TrendingUp,
 } from "lucide-react";
 import {
-  getAllValidationHistory,
   deleteValidationRecord,
   archiveValidationRecord,
 } from "@/lib/database";
 import { ValidationResults } from "@/components/validator/validation-results";
+import { supabase } from "@/lib/supabase";
 import type { ValidationHistory, Profile } from "@/lib/supabase";
 
 type ValidationWithUser = ValidationHistory & {
@@ -94,8 +94,49 @@ export function ReportsOverview({ onStatsChange }: ReportsOverviewProps) {
       try {
         setLoading(true);
         setError(null);
-        const data = await getAllValidationHistory(50);
-        setValidations(data);
+
+        const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+
+        if (sessionError) {
+          throw sessionError;
+        }
+
+        const accessToken = sessionData?.session?.access_token;
+        if (!accessToken) {
+          throw new Error("No active session found");
+        }
+
+        const response = await fetch("/api/admin/validations?limit=50", {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          let message = `Failed to fetch validation history (status ${response.status})`;
+          try {
+            const payload = await response.json();
+            if (payload && typeof payload.error === "string" && payload.error.trim().length > 0) {
+              message = payload.error;
+            } else if (payload && typeof payload.details === "string" && payload.details.trim().length > 0) {
+              message = payload.details;
+            }
+          } catch {
+            // Ignore JSON parse errors when building the message.
+          }
+          throw new Error(message);
+        }
+
+        const payload = (await response.json()) as any;
+
+        const items: ValidationWithUser[] = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload?.items)
+            ? payload.items
+            : [];
+
+        setValidations(items);
         setSuccess("Validation reports loaded successfully");
 
         // Notify parent component about stats change
@@ -104,7 +145,11 @@ export function ReportsOverview({ onStatsChange }: ReportsOverviewProps) {
         }
       } catch (err) {
         console.error("Error loading validations:", err);
-        setError("Failed to load validation reports. Please try again.");
+        const message =
+          err instanceof Error && err.message
+            ? err.message
+            : "Failed to load validation reports. Please try again.";
+        setError(message);
       } finally {
         setLoading(false);
       }
@@ -720,3 +765,9 @@ ${new Date().toLocaleString()}
     </div>
   );
 }
+
+
+
+
+
+

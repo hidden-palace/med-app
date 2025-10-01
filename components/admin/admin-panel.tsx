@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -6,17 +6,24 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CourseManagement } from './course-management';
 import { UserManagement } from './user-management';
 import { ReportsOverview } from './reports-overview';
-import { 
-  BookOpen, 
+import {
+  BookOpen,
   Users,
   FileText,
   Settings
 } from 'lucide-react';
-import { getAllCourses, getProfiles, getAllValidationHistory } from '@/lib/database';
+import { supabase } from '@/lib/supabase';
 
 interface AdminPanelProps {
   userId: string | null;
 }
+
+type AdminStatsResponse = {
+  totalUsers: number;
+  totalCourses: number;
+  totalValidations: number;
+  activeSessions: number;
+};
 
 export function AdminPanel({ userId }: AdminPanelProps) {
   const [activeTab, setActiveTab] = useState('users');
@@ -32,29 +39,55 @@ export function AdminPanel({ userId }: AdminPanelProps) {
     try {
       setLoading(true);
 
-      // Load all data in parallel
-      const [coursesData, usersData, validationsData] = await Promise.all([
-        getAllCourses(),
-        getProfiles(),
-        getAllValidationHistory(1000) // Get more records for accurate count
-      ]);
-      
-      // Calculate active sessions (users who signed in within last 24 hours)
-      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const activeSessions = usersData.filter(user => 
-        user.last_sign_in_at && new Date(user.last_sign_in_at) > oneDayAgo
-      ).length;
-      
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+
+      if (sessionError) {
+        throw sessionError;
+      }
+
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) {
+        throw new Error('No active session found');
+      }
+
+      const response = await fetch('/api/admin/stats', {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        cache: 'no-store',
+      });
+
+      if (!response.ok) {
+        let message = `Failed to fetch admin stats (status ${response.status})`;
+        try {
+          const payload = await response.json();
+          if (payload && typeof payload.error === 'string' && payload.error.trim().length > 0) {
+            message = payload.error;
+          } else if (payload && typeof payload.details === 'string' && payload.details.trim().length > 0) {
+            message = payload.details;
+          }
+        } catch {
+          // Ignore JSON parsing errors in this branch
+        }
+        throw new Error(message);
+      }
+
+      const data = (await response.json()) as Partial<AdminStatsResponse> | null;
+
       setStats({
-        totalUsers: usersData.length,
-        totalCourses: coursesData.length,
-        totalValidations: validationsData.length,
-        activeSessions
+        totalUsers: data?.totalUsers ?? 0,
+        totalCourses: data?.totalCourses ?? 0,
+        totalValidations: data?.totalValidations ?? 0,
+        activeSessions: data?.activeSessions ?? 0
       });
     } catch (error) {
-      const errorString = error instanceof Error ? error.message : String(error);
-      console.error('Error loading admin stats:', errorString);
-      // Keep default values on error
+      console.error('Error loading admin stats:', error);
+      setStats({
+        totalUsers: 0,
+        totalCourses: 0,
+        totalValidations: 0,
+        activeSessions: 0
+      });
     } finally {
       setLoading(false);
     }
