@@ -68,9 +68,7 @@ export function ReportsOverview({ onStatsChange }: ReportsOverviewProps) {
   const [selectedValidation, setSelectedValidation] =
     useState<ValidationHistory | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState<
-    "all" | "completed" | "processing" | "failed" | "archived"
-  >("all");
+  const [statusFilter, setStatusFilter] = useState<ValidationStatusFilter>('all');
   const [dateFilter, setDateFilter] = useState<
     "all" | "today" | "week" | "month"
   >("all");
@@ -529,7 +527,7 @@ ${new Date().toLocaleString()}
             <div className="flex gap-2">
               <Select
                 value={statusFilter}
-                onValueChange={(value: any) => setStatusFilter(value)}
+                onValueChange={(value: ValidationStatusFilter) => setStatusFilter(value)}
               >
                 <SelectTrigger className="w-36">
                   <SelectValue />

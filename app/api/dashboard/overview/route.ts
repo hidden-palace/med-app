@@ -1,6 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { getSupabaseAdminClient } from "@/lib/supabase";
 import type { RecentActivity } from "@/lib/supabase";
 
 export const runtime = "nodejs";
@@ -73,9 +72,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const supabaseAdmin = getSupabaseAdminClient();
-
-    const { data: profile, error: profileError } = await supabaseAdmin
+    const { data: profile, error: profileError } = await supabaseUserClient
       .from("profiles")
       .select("id, is_active")
       .eq("id", userData.user.id)
@@ -99,24 +96,24 @@ export async function GET(request: NextRequest) {
       { count: validationCount, error: validationsError },
       { data: activityRows, error: activityError },
     ] = await Promise.all([
-      supabaseAdmin
+      supabaseUserClient
         .from("courses")
         .select("id, title, thumbnail, order_index")
         .eq("published", true)
         .order("order_index", { ascending: true }),
-      supabaseAdmin
+      supabaseUserClient
         .from("modules")
         .select("id, course_id, order_index")
         .eq("published", true),
-      supabaseAdmin
+      supabaseUserClient
         .from("user_progress")
         .select("course_id, module_id, completed, last_position")
         .eq("user_id", userData.user.id),
-      supabaseAdmin
+      supabaseUserClient
         .from("validation_history")
         .select("id", { count: "exact", head: true })
         .eq("user_id", userData.user.id),
-      supabaseAdmin
+      supabaseUserClient
         .from("recent_activity")
         .select("*")
         .eq("user_id", userData.user.id)
