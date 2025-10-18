@@ -96,7 +96,9 @@ export async function GET(request: NextRequest) {
 
     let query = supabaseAdmin
       .from("validation_history")
-      .select("*, profiles(full_name, email)")
+      .select(
+        "*, profiles:profiles!validation_history_user_id_fkey(full_name, email)",
+      )
       .order("created_at", { ascending: false })
       .limit(limit);
 
