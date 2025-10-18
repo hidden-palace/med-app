@@ -96,9 +96,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabaseAdmin
       .from("validation_history")
-      .select(
-        "*, profiles:profiles!validation_history_user_id_fkey(full_name, email)",
-      )
+      .select("*")
       .order("created_at", { ascending: false })
       .limit(limit);
 
@@ -106,14 +104,56 @@ export async function GET(request: NextRequest) {
       query = query.ilike("status", normalizedStatus);
     }
 
-    const { data, error } = await query;
+    const { data: validations, error } = await query;
 
     if (error) {
       throw error;
     }
 
+    if (!validations || validations.length === 0) {
+      return NextResponse.json({
+        items: [],
+      });
+    }
+
+    const uniqueUserIds = Array.from(
+      new Set(
+        validations
+          .map((validation) => validation.user_id)
+          .filter((userId): userId is string => typeof userId === "string"),
+      ),
+    );
+
+    let profilesById = new Map<string, { full_name: string | null; email: string | null }>();
+
+    if (uniqueUserIds.length > 0) {
+      const {
+        data: profiles,
+        error: profilesError,
+      } = await supabaseAdmin
+        .from("profiles")
+        .select("id, full_name, email")
+        .in("id", uniqueUserIds);
+
+      if (profilesError) {
+        throw profilesError;
+      }
+
+      profilesById = new Map(
+        (profiles ?? []).map((profile) => [
+          profile.id,
+          { full_name: profile.full_name, email: profile.email },
+        ]),
+      );
+    }
+
+    const enrichedValidations = validations.map((validation) => ({
+      ...validation,
+      profiles: profilesById.get(validation.user_id) ?? null,
+    }));
+
     return NextResponse.json({
-      items: data ?? [],
+      items: enrichedValidations,
     });
   } catch (error) {
     console.error("admin validations error:", error);
