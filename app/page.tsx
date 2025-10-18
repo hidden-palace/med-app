@@ -86,6 +86,52 @@ export default function Home() {
       return;
     }
 
+    const intervalId = window.setInterval(async () => {
+      try {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("active_session_hash")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (error) {
+          console.error("Failed to poll active session hash:", error);
+          return;
+        }
+
+        const activeHash =
+          typeof data?.active_session_hash === "string" &&
+          data.active_session_hash.trim().length > 0
+            ? data.active_session_hash.trim()
+            : null;
+
+        if (!activeHash) {
+          return;
+        }
+
+        const currentHash =
+          currentSessionHashRef.current ?? syncCurrentSessionHash();
+
+        if (currentHash && currentHash !== activeHash) {
+          void handleInactiveSignOut(
+            "You have been signed out because your account was used from another device. Please sign in again.",
+          );
+        }
+      } catch (pollError) {
+        console.error("Error checking active session hash:", pollError);
+      }
+    }, 15000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [handleInactiveSignOut, syncCurrentSessionHash, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      return;
+    }
+
     const channel = supabase
       .channel(`profile-status-${user.id}`)
       .on(
