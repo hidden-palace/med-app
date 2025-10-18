@@ -22,6 +22,22 @@ import type { AuthError } from "@supabase/supabase-js";
 
 const SESSION_FINGERPRINT_KEY = "uptoshift-active-session";
 
+function writeSessionFingerprint(value: string | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    if (value) {
+      window.sessionStorage.setItem(SESSION_FINGERPRINT_KEY, value);
+    } else {
+      window.sessionStorage.removeItem(SESSION_FINGERPRINT_KEY);
+    }
+  } catch (error) {
+    console.warn("Unable to persist session fingerprint:", error);
+  }
+}
+
 interface AuthFormProps {
   onAuthStateChange?: (authenticated: boolean) => void;
   initialError?: string | null;
@@ -138,25 +154,16 @@ export function AuthForm({
             );
           }
 
-          if (typeof window !== "undefined") {
-            window.localStorage.setItem(
-              SESSION_FINGERPRINT_KEY,
-              sessionFingerprint,
-            );
-          }
+          writeSessionFingerprint(sessionFingerprint);
         } catch (enforceError) {
           console.error("Failed to enforce single session:", enforceError);
-          if (typeof window !== "undefined") {
-            window.localStorage.removeItem(SESSION_FINGERPRINT_KEY);
-          }
+          writeSessionFingerprint(null);
         }
       }
 
       setSuccess("Successfully signed in!");
     } catch (error) {
-      if (typeof window !== "undefined") {
-        window.localStorage.removeItem(SESSION_FINGERPRINT_KEY);
-      }
+      writeSessionFingerprint(null);
       const authError = error as AuthError;
       setError(authError.message || "An error occurred during sign in");
     } finally {

@@ -15,6 +15,35 @@ import type { Profile } from "@/lib/supabase";
 
 const SESSION_FINGERPRINT_KEY = "uptoshift-active-session";
 
+function readSessionFingerprint(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return window.sessionStorage.getItem(SESSION_FINGERPRINT_KEY);
+  } catch (error) {
+    console.warn("Unable to read session fingerprint:", error);
+    return null;
+  }
+}
+
+function writeSessionFingerprint(value: string | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    if (value) {
+      window.sessionStorage.setItem(SESSION_FINGERPRINT_KEY, value);
+    } else {
+      window.sessionStorage.removeItem(SESSION_FINGERPRINT_KEY);
+    }
+  } catch (error) {
+    console.warn("Unable to persist session fingerprint:", error);
+  }
+}
+
 type ActiveView = "dashboard" | "learning" | "validator" | "admin";
 
 export default function Home() {
@@ -37,7 +66,7 @@ export default function Home() {
       return null;
     }
 
-    const stored = window.localStorage.getItem(SESSION_FINGERPRINT_KEY);
+    const stored = readSessionFingerprint();
     currentSessionHashRef.current = stored;
     return stored;
   }, []);
@@ -53,9 +82,7 @@ export default function Home() {
     );
 
     currentSessionHashRef.current = null;
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem(SESSION_FINGERPRINT_KEY);
-    }
+    writeSessionFingerprint(null);
     setProfile(null);
     profileRef.current = null;
     setIsAdmin(false);
@@ -166,9 +193,7 @@ export default function Home() {
               );
             } else if (!currentSessionHashRef.current) {
               const storedHash =
-                typeof window !== "undefined"
-                  ? window.localStorage.getItem(SESSION_FINGERPRINT_KEY)
-                  : null;
+                typeof window !== "undefined" ? readSessionFingerprint() : null;
 
               if (storedHash && storedHash !== newSessionHash) {
                 void handleInactiveSignOut(
@@ -189,14 +214,9 @@ export default function Home() {
               currentSessionHashRef.current = newSessionHash;
             }
 
-            if (typeof window !== "undefined") {
-              window.localStorage.setItem(
-                SESSION_FINGERPRINT_KEY,
-                newSessionHash,
-              );
-            }
-          } else if (typeof window !== "undefined") {
-            window.localStorage.removeItem(SESSION_FINGERPRINT_KEY);
+            writeSessionFingerprint(newSessionHash);
+          } else {
+            writeSessionFingerprint(null);
           }
 
           if (payload.new && typeof payload.new === "object") {
@@ -313,15 +333,10 @@ export default function Home() {
           const activeSessionHash = userProfile?.active_session_hash ?? null;
           currentSessionHashRef.current = activeSessionHash;
 
-          if (typeof window !== "undefined") {
-            if (activeSessionHash) {
-              window.localStorage.setItem(
-                SESSION_FINGERPRINT_KEY,
-                activeSessionHash,
-              );
-            } else {
-              window.localStorage.removeItem(SESSION_FINGERPRINT_KEY);
-            }
+          if (activeSessionHash) {
+            writeSessionFingerprint(activeSessionHash);
+          } else {
+            writeSessionFingerprint(null);
           }
 
           const adminStatus = userProfile?.role === "admin";
@@ -470,9 +485,7 @@ export default function Home() {
 
   const handleLogout = useCallback(async () => {
     currentSessionHashRef.current = null;
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem(SESSION_FINGERPRINT_KEY);
-    }
+    writeSessionFingerprint(null);
     setUser(null);
     setProfile(null);
     setIsAdmin(false);
