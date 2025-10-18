@@ -195,12 +195,17 @@ export async function POST(request: NextRequest) {
 
       await Promise.all(
         tokensToRevoke.map(async ({ token }) => {
-          if (!token.session_id) {
+          const hashedToken = token.token;
+          if (!hashedToken) {
+            console.warn(
+              "force-single-session: skipping token revocation because hashed token is missing",
+              JSON.stringify(token),
+            );
             return;
           }
 
           const revokeResponse = await fetch(
-            `${supabaseUrl}/auth/v1/admin/users/${payload.userId}/refresh_tokens/${token.session_id}`,
+            `${supabaseUrl}/auth/v1/admin/users/${payload.userId}/refresh_tokens/${encodeURIComponent(hashedToken)}`,
             {
               method: "DELETE",
               headers: adminHeaders,
@@ -210,7 +215,7 @@ export async function POST(request: NextRequest) {
           if (!revokeResponse.ok) {
             const message = await revokeResponse.text();
             throw new Error(
-              `Failed to revoke session ${token.session_id}: ${revokeResponse.status} ${message}`,
+              `Failed to revoke refresh token ${token.session_id ?? "[unknown session]"}: ${revokeResponse.status} ${message}`,
             );
           }
         }),
