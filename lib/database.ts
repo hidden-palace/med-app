@@ -1134,12 +1134,14 @@ export async function enforceSingleSession(userId: string): Promise<AdminActionR
       return { success: true }
     }
 
-    const payload = await response.json().catch(() => null)
+    const responsePayload = await response.json().catch(() => null)
 
     return {
       success: false,
       message:
-        (payload && typeof payload.error === 'string' && payload.error) ||
+        (responsePayload &&
+          typeof responsePayload.error === 'string' &&
+          responsePayload.error) ||
         `Failed to enforce single session (status ${response.status})`,
     }
   } catch (error) {
