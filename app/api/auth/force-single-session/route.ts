@@ -12,6 +12,7 @@ type ForceSingleSessionPayload = {
 };
 
 type AdminRefreshToken = {
+  id: string;
   session_id: string | null;
   token?: string | null;
   current?: boolean;
@@ -34,7 +35,8 @@ function getAnonKey() {
 }
 
 function getServiceRoleKey() {
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const rawKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const key = typeof rawKey === "string" ? rawKey.trim() : rawKey;
   if (!key) {
     return null;
   }
@@ -134,92 +136,100 @@ export async function POST(request: NextRequest) {
         "Content-Type": "application/json",
       };
 
-      const refreshTokensResponse = await fetch(
-        `${supabaseUrl}/auth/v1/admin/users/${payload.userId}/refresh_tokens`,
-        {
-          headers: adminHeaders,
-          cache: "no-store",
-        },
-      );
-
-      if (!refreshTokensResponse.ok) {
-        const message = await refreshTokensResponse.text();
-        throw new Error(
-          `Failed to load refresh tokens: ${refreshTokensResponse.status} ${message}`,
+      try {
+        const refreshTokensResponse = await fetch(
+          `${supabaseUrl}/auth/v1/admin/users/${payload.userId}/refresh_tokens`,
+          {
+            headers: adminHeaders,
+            cache: "no-store",
+          },
         );
-      }
 
-      const refreshTokens =
-        (await refreshTokensResponse.json()) as AdminRefreshToken[];
-
-      const tokensToRevoke: Array<{ token: AdminRefreshToken; index: number }> =
-        [];
-
-      refreshTokens.forEach((token, index) => {
-        const matchesSessionId =
-          sessionId && token.session_id && token.session_id === sessionId;
-        const matchesHash =
-          refreshTokenHash && token.token && token.token === refreshTokenHash;
-
-        const shouldKeep =
-          matchesSessionId ||
-          matchesHash ||
-          (!sessionId && !refreshTokenHash && token.current === true);
-
-        if (shouldKeep) {
-          return;
-        }
-
-        tokensToRevoke.push({ token, index });
-      });
-
-      if (
-        refreshTokens.length > 0 &&
-        tokensToRevoke.length === refreshTokens.length
-      ) {
-        const currentIndex = refreshTokens.findIndex(
-          (token) => token.current === true,
-        );
-        if (currentIndex >= 0) {
-          const revokeIndex = tokensToRevoke.findIndex(
-            (entry) => entry.index === currentIndex,
+        if (refreshTokensResponse.status === 404) {
+          console.warn(
+            "force-single-session: refresh token endpoint returned 404, skipping token revocation step.",
           );
-          if (revokeIndex >= 0) {
-            tokensToRevoke.splice(revokeIndex, 1);
-          }
-        }
-        if (tokensToRevoke.length === refreshTokens.length) {
-          tokensToRevoke.pop();
-        }
-      }
+        } else if (!refreshTokensResponse.ok) {
+          const message = await refreshTokensResponse.text();
+          throw new Error(
+            `Failed to load refresh tokens: ${refreshTokensResponse.status} ${message}`,
+          );
+        } else {
+          const refreshTokens =
+            (await refreshTokensResponse.json()) as AdminRefreshToken[];
 
-      await Promise.all(
-        tokensToRevoke.map(async ({ token }) => {
-          const hashedToken = token.token;
-          if (!hashedToken) {
-            console.warn(
-              "force-single-session: skipping token revocation because hashed token is missing",
-              JSON.stringify(token),
-            );
-            return;
-          }
+          const tokenIdsToKeep = new Set<string>();
 
-          const revokeResponse = await fetch(
-            `${supabaseUrl}/auth/v1/admin/users/${payload.userId}/refresh_tokens/${encodeURIComponent(hashedToken)}`,
-            {
-              method: "DELETE",
-              headers: adminHeaders,
-            },
+          refreshTokens.forEach((token) => {
+            const matchesSessionId =
+              sessionId && token.session_id && token.session_id === sessionId;
+            const matchesHash =
+              refreshTokenHash &&
+              token.token &&
+              token.token === refreshTokenHash;
+            const matchesRawToken =
+              refreshToken && token.token && token.token === refreshToken;
+
+            if (
+              matchesSessionId ||
+              matchesHash ||
+              matchesRawToken ||
+              token.current === true
+            ) {
+              tokenIdsToKeep.add(token.id);
+            }
+          });
+
+          let tokensToRevoke = refreshTokens.filter(
+            (token) => !tokenIdsToKeep.has(token.id),
           );
 
-          if (!revokeResponse.ok) {
-            const message = await revokeResponse.text();
-            throw new Error(
-              `Failed to revoke refresh token ${token.session_id ?? "[unknown session]"}: ${revokeResponse.status} ${message}`,
+          if (
+            refreshTokens.length > 0 &&
+            tokensToRevoke.length === refreshTokens.length
+          ) {
+            // If we would revoke every token, keep the most recent one as a safety net.
+            const tokenToKeep =
+              refreshTokens.find((token) => token.current === true) ??
+              refreshTokens[0];
+            tokenIdsToKeep.add(tokenToKeep.id);
+            tokensToRevoke = refreshTokens.filter(
+              (token) => !tokenIdsToKeep.has(token.id),
             );
           }
-        }),
-      );
+
+          await Promise.all(
+            tokensToRevoke.map(async (token) => {
+              const revokeResponse = await fetch(
+                `${supabaseUrl}/auth/v1/admin/users/${payload.userId}/refresh_tokens/${encodeURIComponent(token.id)}`,
+                {
+                  method: "DELETE",
+                  headers: adminHeaders,
+                },
+              );
+
+              if (revokeResponse.status === 404) {
+                console.warn(
+                  `force-single-session: refresh token ${token.id} not found when revoking, skipping.`,
+                );
+                return;
+              }
+
+              if (!revokeResponse.ok) {
+                const message = await revokeResponse.text();
+                throw new Error(
+                  `Failed to revoke refresh token ${token.session_id ?? "[unknown session]"}: ${revokeResponse.status} ${message}`,
+                );
+              }
+            }),
+          );
+        }
+      } catch (tokenError) {
+        console.warn(
+          "force-single-session: token revocation failed and was skipped",
+          tokenError,
+        );
+      }
     }
 
     const sessionFingerprint =

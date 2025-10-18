@@ -1111,16 +1111,23 @@ export async function enforceSingleSession(userId: string): Promise<AdminActionR
       return { success: false, message: 'No active session available' }
     }
 
+    const payload: Record<string, unknown> = { userId }
+
+    const sessionWithId = session as { session_id?: string }
+    if (sessionWithId.session_id) {
+      payload.sessionId = sessionWithId.session_id
+    }
+    if (session.refresh_token) {
+      payload.refreshToken = session.refresh_token
+    }
+
     const response = await fetch('/api/auth/force-single-session', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({
-        userId,
-        sessionId: session.refresh_token ?? session.access_token,
-      }),
+      body: JSON.stringify(payload),
     })
 
     if (response.status === 204) {
