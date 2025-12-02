@@ -31,6 +31,12 @@ interface SidebarProps {
 
 const navigationItems = [
   {
+    id: "validator",
+    label: "Note Validator",
+    icon: Shield,
+    description: "Validate clinical notes first",
+  },
+  {
     id: "dashboard",
     label: "Dashboard",
     icon: BarChart3,
@@ -41,12 +47,6 @@ const navigationItems = [
     label: "Learning Module",
     icon: GraduationCap,
     description: "Courses and lessons",
-  },
-  {
-    id: "validator",
-    label: "Note Validator",
-    icon: Shield,
-    description: "Validate clinical notes",
   },
   {
     id: "admin",

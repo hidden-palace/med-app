@@ -10,6 +10,7 @@ export interface ValidationRequest {
   region: string;
   userId: string;
   fileUrl?: string;
+  prompt?: string;
 }
 
 export interface ValidationResponse {

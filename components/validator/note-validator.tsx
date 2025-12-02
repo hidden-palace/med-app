@@ -5,10 +5,9 @@ import { NoteUpload } from './note-upload';
 import { ValidationResults } from './validation-results';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { MapPin, FileCheck, Clock, AlertTriangle } from 'lucide-react';
-import { createValidationRecord, getValidationHistory, addRecentActivity, updateValidationResult, uploadValidationFile } from '@/lib/database';
+import { FileCheck, Clock, AlertTriangle } from 'lucide-react';
+import { createValidationRecord, getValidationHistory, addRecentActivity, updateValidationResult } from '@/lib/database';
 import { sendToN8N } from '@/lib/n8n-client';
 import { supabase } from '@/lib/supabase';
 import type { ValidationHistory } from '@/lib/supabase';
@@ -17,65 +16,14 @@ interface NoteValidatorProps {
   userId: string | null;
 }
 
-const US_STATES = [
-  'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware',
-  'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky',
-  'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi',
-  'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey', 'New Mexico',
-  'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania',
-  'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont',
-  'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming'
-];
-
-const STATE_TO_REGION: Record<string, string> = {
-  'California': 'West',
-  'Oregon': 'West',
-  'Washington': 'West',
-  'Nevada': 'West',
-  'Arizona': 'Southwest',
-  'Texas': 'Southwest',
-  'New Mexico': 'Southwest',
-  'Colorado': 'Southwest',
-  'Florida': 'Southeast',
-  'Georgia': 'Southeast',
-  'North Carolina': 'Southeast',
-  'South Carolina': 'Southeast',
-  'Virginia': 'Southeast',
-  'Tennessee': 'Southeast',
-  'Kentucky': 'Southeast',
-  'Alabama': 'Southeast',
-  'Mississippi': 'Southeast',
-  'Louisiana': 'Southeast',
-  'Arkansas': 'Southeast',
-  'Illinois': 'Midwest',
-  'Indiana': 'Midwest',
-  'Iowa': 'Midwest',
-  'Kansas': 'Midwest',
-  'Michigan': 'Midwest',
-  'Minnesota': 'Midwest',
-  'Missouri': 'Midwest',
-  'Nebraska': 'Midwest',
-  'North Dakota': 'Midwest',
-  'Ohio': 'Midwest',
-  'South Dakota': 'Midwest',
-  'Wisconsin': 'Midwest',
-  'New York': 'Northeast',
-  'Pennsylvania': 'Northeast',
-  'New Jersey': 'Northeast',
-  'Connecticut': 'Northeast',
-  'Massachusetts': 'Northeast',
-  'Rhode Island': 'Northeast',
-  'Vermont': 'Northeast',
-  'New Hampshire': 'Northeast',
-  'Maine': 'Northeast',
-  'Maryland': 'Northeast',
-  'Delaware': 'Northeast',
-  'West Virginia': 'Northeast'
-};
+const TEXAS_STATE = 'Texas';
+const TEXAS_REGION = 'Texas LCD';
+const DEFAULT_NOTE_NAME = 'clinical-note.txt';
+const DEFAULT_NOTE_TYPE = 'text/plain';
+const TEXAS_LCD_PROMPT = 'Is this compliant based on Texas wound care skin substitute LCD?';
 
 
 export function NoteValidator({ userId }: NoteValidatorProps) {
-  const [selectedState, setSelectedState] = useState<string>('');
   const [validationResults, setValidationResults] = useState<ValidationHistory | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [recentValidations, setRecentValidations] = useState<ValidationHistory[]>([]);
@@ -90,10 +38,10 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
           {
             id: '1',
             user_id: 'demo',
-            file_name: 'patient_note_001.pdf',
-            file_type: 'application/pdf',
-            state: 'California',
-            region: 'West',
+            file_name: 'patient_note_001.txt',
+            file_type: 'text/plain',
+            state: TEXAS_STATE,
+            region: TEXAS_REGION,
             status: 'completed',
             result_summary: 'Validation completed successfully',
             result_details: { score: 92, sections: [], warnings: [] },
@@ -117,9 +65,11 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
     loadRecentValidations();
   }, [loadRecentValidations]);
 
-  const handleFileUpload = async (file: File, textContent?: string) => {
-    if (!selectedState) {
-      setErrorMessage('Please select a state before uploading a note.');
+  const handleTextValidation = async (textContent: string) => {
+    const noteContent = textContent.trim();
+
+    if (!noteContent) {
+      setErrorMessage('Please paste the clinical note text before validating.');
       return;
     }
 
@@ -132,43 +82,29 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
     setIsValidating(true);
 
     let validationRecord: ValidationHistory | null = null;
+    const fileName = DEFAULT_NOTE_NAME;
+    const fileType = DEFAULT_NOTE_TYPE;
 
     try {
-      const region = getRegionForState(selectedState);
-
-      let uploadedFileUrl: string | undefined;
-      let content: string;
-
-      if (file && !textContent) {
-        console.log('Uploading file to Supabase Storage...');
-        uploadedFileUrl = await uploadValidationFile(userId, file, file.name);
-        console.log('File uploaded successfully:', uploadedFileUrl);
-        content = 'FILE_UPLOAD_URL_PROVIDED';
-      } else {
-        console.log('Using pasted text content');
-        content = textContent || '';
-      }
-
       validationRecord = await createValidationRecord(
         userId,
-        file.name,
-        file.type,
-        selectedState,
-        region,
-        uploadedFileUrl
+        fileName,
+        fileType,
+        TEXAS_STATE,
+        TEXAS_REGION
       );
       console.log('Validation record created:', validationRecord.id);
 
-      console.log('Sending to N8N for processing...');
+      console.log('Sending to N8N for processing with Texas LCD prompt...');
       const n8nResponse = await sendToN8N({
         validationId: validationRecord.id,
-        fileName: file.name,
-        fileType: file.type,
-        content,
-        state: selectedState,
-        region,
+        fileName,
+        fileType,
+        content: noteContent,
+        state: TEXAS_STATE,
+        region: TEXAS_REGION,
         userId,
-        fileUrl: uploadedFileUrl
+        prompt: TEXAS_LCD_PROMPT
       });
       console.log('N8N response received:', n8nResponse);
 
@@ -176,8 +112,8 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
       await addRecentActivity(
         userId,
         'note_validated',
-        file.name,
-        `Validation started for ${selectedState}`
+        fileName,
+        'Validation started using Texas LCD criteria'
       );
 
       console.log('Starting polling for results...');
@@ -254,65 +190,19 @@ export function NoteValidator({ userId }: NoteValidatorProps) {
     setTimeout(poll, 5000);
   };
 
-  const getRegionForState = (state: string): string => {
-    return STATE_TO_REGION[state] || 'Unknown';
-  };
-
   return (
     <div className="space-y-6">
       {errorMessage && (
         <Alert variant="destructive">
           <AlertTriangle className="w-4 h-4" />
-          <AlertDescription>{errorMessage}</AlertDescription>
-        </Alert>
-      )}
+      <AlertDescription>{errorMessage}</AlertDescription>
+    </Alert>
+  )}
 
-      {/* State Selection */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center space-x-2">
-            <MapPin className="w-5 h-5 text-blue-600" />
-            <span>State Selection</span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Select State for Validation
-              </label>
-              <Select value={selectedState} onValueChange={setSelectedState}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Choose a state..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {US_STATES.map((state) => (
-                    <SelectItem key={state} value={state}>
-                      {state}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {selectedState && (
-              <div className="bg-blue-50 p-3 sm:p-4 rounded-lg">
-                <div className="text-sm font-medium text-blue-900">Selected Region</div>
-                <div className="text-blue-700 mt-1">{getRegionForState(selectedState)}</div>
-                <div className="text-xs text-blue-600 mt-2 hidden sm:block">
-                  Validation rules will be applied based on {selectedState} regulations
-                </div>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* File Upload */}
+      {/* Note Submission */}
       <NoteUpload
-        onFileUpload={handleFileUpload}
+        onSubmitText={handleTextValidation}
         isValidating={isValidating}
-        disabled={!selectedState}
       />
 
       {/* Validation Results */}
