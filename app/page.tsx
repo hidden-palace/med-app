@@ -139,7 +139,13 @@ export default function Home() {
         const currentHash =
           currentSessionHashRef.current ?? syncCurrentSessionHash();
 
-        if (currentHash && currentHash !== activeHash) {
+        if (!currentHash) {
+          currentSessionHashRef.current = activeHash;
+          writeSessionFingerprint(activeHash);
+          return;
+        }
+
+        if (currentHash !== activeHash) {
           void handleInactiveSignOut(
             "You have been signed out because your account was used from another device. Please sign in again.",
           );
@@ -202,14 +208,7 @@ export default function Home() {
                 return;
               }
 
-              if (!storedHash) {
-                void handleInactiveSignOut(
-                  "You have been signed out because your account was used from another device. Please sign in again.",
-                );
-                return;
-              }
-
-              currentSessionHashRef.current = storedHash;
+            currentSessionHashRef.current = storedHash ?? newSessionHash;
             } else {
               currentSessionHashRef.current = newSessionHash;
             }
