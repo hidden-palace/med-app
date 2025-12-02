@@ -59,6 +59,7 @@ export default function Home() {
   const adminStatusRef = useRef(false);
   const profileRef = useRef<Profile | null>(null);
   const currentSessionHashRef = useRef<string | null>(null);
+  const lastSeenActiveHashRef = useRef<string | null>(null);
 
   const syncCurrentSessionHash = useCallback(() => {
     if (typeof window === "undefined") {
@@ -68,6 +69,9 @@ export default function Home() {
 
     const stored = readSessionFingerprint();
     currentSessionHashRef.current = stored;
+    if (stored) {
+      lastSeenActiveHashRef.current = stored;
+    }
     return stored;
   }, []);
 
@@ -89,6 +93,8 @@ export default function Home() {
     adminStatusRef.current = false;
     lastAdminCheckUserIdRef.current = null;
     adminCheckPromiseRef.current = null;
+    lastSeenActiveHashRef.current = null;
+    lastSeenActiveHashRef.current = null;
 
     try {
       await supabase.auth.signOut();
@@ -113,6 +119,37 @@ export default function Home() {
       return;
     }
 
+    const reconcileSessionHash = (serverHash: string | null) => {
+      if (!serverHash) return;
+
+      const localHash =
+        currentSessionHashRef.current ?? syncCurrentSessionHash();
+      const lastSeen = lastSeenActiveHashRef.current;
+
+      if (!localHash) {
+        currentSessionHashRef.current = serverHash;
+        lastSeenActiveHashRef.current = serverHash;
+        writeSessionFingerprint(serverHash);
+        return;
+      }
+
+      if (localHash === serverHash) {
+        lastSeenActiveHashRef.current = serverHash;
+        return;
+      }
+
+      if (lastSeen && lastSeen !== serverHash) {
+        void handleInactiveSignOut(
+          "You have been signed out because your account was used from another device. Please sign in again.",
+        );
+        return;
+      }
+
+      currentSessionHashRef.current = serverHash;
+      lastSeenActiveHashRef.current = serverHash;
+      writeSessionFingerprint(serverHash);
+    };
+
     const intervalId = window.setInterval(async () => {
       try {
         const { data, error } = await supabase
@@ -132,24 +169,7 @@ export default function Home() {
             ? data.active_session_hash.trim()
             : null;
 
-        if (!activeHash) {
-          return;
-        }
-
-        const currentHash =
-          currentSessionHashRef.current ?? syncCurrentSessionHash();
-
-        if (!currentHash) {
-          currentSessionHashRef.current = activeHash;
-          writeSessionFingerprint(activeHash);
-          return;
-        }
-
-        if (currentHash !== activeHash) {
-          void handleInactiveSignOut(
-            "You have been signed out because your account was used from another device. Please sign in again.",
-          );
-        }
+        reconcileSessionHash(activeHash);
       } catch (pollError) {
         console.error("Error checking active session hash:", pollError);
       }
@@ -190,29 +210,32 @@ export default function Home() {
             payload.new as { active_session_hash?: string } | null
           )?.active_session_hash;
           if (typeof newSessionHash === "string" && newSessionHash.length > 0) {
-            if (
-              currentSessionHashRef.current &&
-              currentSessionHashRef.current !== newSessionHash
-            ) {
+            const localHash =
+              currentSessionHashRef.current ?? syncCurrentSessionHash();
+            const lastSeen = lastSeenActiveHashRef.current;
+
+            if (!localHash) {
+              currentSessionHashRef.current = newSessionHash;
+              lastSeenActiveHashRef.current = newSessionHash;
+              writeSessionFingerprint(newSessionHash);
+              return;
+            }
+
+            if (localHash === newSessionHash) {
+              lastSeenActiveHashRef.current = newSessionHash;
+              writeSessionFingerprint(newSessionHash);
+              return;
+            }
+
+            if (lastSeen && lastSeen !== newSessionHash) {
               void handleInactiveSignOut(
                 "You have been signed out because your account was used from another device. Please sign in again.",
               );
-            } else if (!currentSessionHashRef.current) {
-              const storedHash =
-                typeof window !== "undefined" ? readSessionFingerprint() : null;
-
-              if (storedHash && storedHash !== newSessionHash) {
-                void handleInactiveSignOut(
-                  "You have been signed out because your account was used from another device. Please sign in again.",
-                );
-                return;
-              }
-
-            currentSessionHashRef.current = storedHash ?? newSessionHash;
-            } else {
-              currentSessionHashRef.current = newSessionHash;
+              return;
             }
 
+            currentSessionHashRef.current = newSessionHash;
+            lastSeenActiveHashRef.current = newSessionHash;
             writeSessionFingerprint(newSessionHash);
           } else {
             writeSessionFingerprint(null);
@@ -331,6 +354,9 @@ export default function Home() {
 
           const activeSessionHash = userProfile?.active_session_hash ?? null;
           currentSessionHashRef.current = activeSessionHash;
+          if (activeSessionHash) {
+            lastSeenActiveHashRef.current = activeSessionHash;
+          }
 
           if (activeSessionHash) {
             writeSessionFingerprint(activeSessionHash);
