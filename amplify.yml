@@ -1,0 +1,23 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - npm ci
+    build:
+      commands:
+        # Write all relevant env vars into .env.production
+        - env | grep -e NEXT_PUBLIC_N8N_WEBHOOK_URL >> .env.production
+        - env | grep -e NEXT_PUBLIC_N8N_SIZE_WEBHOOK_URL >> .env.production
+        - env | grep -e NEXT_PUBLIC_SUPABASE_ANON_KEY >> .env.production
+        - env | grep -e NEXT_PUBLIC_SUPABASE_URL >> .env.production
+        - env | grep -e SUPABASE_SERVICE_ROLE_KEY >> .env.production
+        - npm run build
+  artifacts:
+    baseDirectory: .next
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*
+      - .next/cache/**/*

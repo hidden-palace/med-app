@@ -1,5 +1,7 @@
 // N8N integration utilities for note validation
 export const N8N_PLACEHOLDER_URL = 'https://your-n8n-instance.com/webhook/validate-note';
+export const N8N_SIZE_PLACEHOLDER_URL =
+  'https://your-n8n-instance.com/webhook/wound-size-change';
 
 export interface ValidationRequest {
   validationId: string;
@@ -11,6 +13,7 @@ export interface ValidationRequest {
   userId: string;
   fileUrl?: string;
   prompt?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ValidationResponse {
@@ -115,9 +118,9 @@ export async function postToN8N(
   return parseN8NResponse(response);
 }
 
-function resolveTriggerEndpoint(): string {
+function resolveTriggerEndpoint(path = 'api/n8n/trigger'): string {
   if (typeof window !== 'undefined') {
-    return '/api/n8n/trigger';
+    return `/${path.replace(/^\/+/, '')}`;
   }
 
   const baseUrl =
@@ -136,7 +139,7 @@ function resolveTriggerEndpoint(): string {
   }
 
   const trimmedBaseUrl = baseUrl.replace(/\/+$/, '');
-  return `${trimmedBaseUrl}/api/n8n/trigger`;
+  return `${trimmedBaseUrl}/${path.replace(/^\/+/, '')}`;
 }
 
 export async function sendToN8N(
@@ -153,7 +156,7 @@ export async function sendToN8N(
 
   console.log('Proxying validation request through /api/n8n/trigger.');
 
-  const triggerEndpoint = resolveTriggerEndpoint();
+  const triggerEndpoint = resolveTriggerEndpoint('api/n8n/trigger');
   const response = await fetch(triggerEndpoint, {
     method: 'POST',
     headers: {
@@ -185,6 +188,79 @@ export async function sendToN8N(
       rawError.length > 0
         ? rawError
         : `Failed to trigger validation: ${response.status} ${response.statusText}`;
+
+    throw new Error(errorMessage);
+  }
+
+  if (
+    payload &&
+    typeof (payload as { data?: unknown }).data === 'object' &&
+    (payload as { data?: unknown }).data
+  ) {
+    const data = (payload as { data: Record<string, unknown> }).data;
+    return {
+      executionId: normalizeExecutionId((data as { executionId?: unknown }).executionId),
+      status: normalizeStatus((data as { status?: unknown }).status),
+      message: normalizeMessage((data as { message?: unknown }).message),
+    };
+  }
+
+  const fallbackMessage =
+    payload && typeof (payload as { message?: unknown }).message === 'string'
+      ? (payload as { message: string }).message
+      : undefined;
+
+  return buildDefaultResponse(fallbackMessage);
+}
+
+export async function sendToN8NSize(
+  validationData: ValidationRequest
+): Promise<ValidationResponse> {
+  const directWebhook =
+    process.env.NEXT_PUBLIC_N8N_SIZE_WEBHOOK_URL || process.env.N8N_SIZE_WEBHOOK_URL;
+  const hasDirectWebhook =
+    Boolean(directWebhook) && directWebhook !== N8N_SIZE_PLACEHOLDER_URL;
+  const isServer = typeof window === 'undefined';
+
+  if (hasDirectWebhook && isServer) {
+    console.log('Sending wound size change request directly to N8N webhook.');
+    return postToN8N(validationData, directWebhook as string);
+  }
+
+  console.log('Proxying wound size change request through /api/n8n/size-trigger.');
+
+  const triggerEndpoint = resolveTriggerEndpoint('api/n8n/size-trigger');
+  const response = await fetch(triggerEndpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(validationData),
+  });
+
+  let payload: Record<string, unknown> | null = null;
+  try {
+    payload = (await response.json()) as Record<string, unknown> | null;
+  } catch (error) {
+    console.warn('Unable to parse wound size proxy response as JSON:', error);
+  }
+
+  const payloadSuccess = Boolean(
+    payload &&
+      Object.prototype.hasOwnProperty.call(payload, 'success') &&
+      (payload as { success?: unknown }).success
+  );
+
+  if (!response.ok || !payloadSuccess) {
+    const rawError =
+      payload && typeof (payload as { error?: unknown }).error === 'string'
+        ? ((payload as { error: string }).error).trim()
+        : '';
+
+    const errorMessage =
+      rawError.length > 0
+        ? rawError
+        : `Failed to trigger wound size calculation: ${response.status} ${response.statusText}`;
 
     throw new Error(errorMessage);
   }

@@ -35,7 +35,7 @@ export function NoteUpload({ onSubmitText, isValidating }: NoteUploadProps) {
             <span>Paste Clinical Note Text</span>
           </CardTitle>
           <p className="text-sm text-gray-500">
-            Texas LCD criteria are applied to every submission.
+            Most strict criteria (Texas) applied to every submission.
           </p>
         </div>
       </CardHeader>

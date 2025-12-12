@@ -40,7 +40,7 @@ export function ValidationResults({ result }: ValidationResultsProps) {
       <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <CardTitle className="flex items-center gap-2 text-lg">
           <FileText className="h-5 w-5 text-primary" />
-          <span>ChatGPT Recommendations</span>
+          <span>Recommendations (not medical advice)</span>
         </CardTitle>
         <Button onClick={handleDownloadReport} variant="outline">
           <Download className="mr-2 h-4 w-4" />
