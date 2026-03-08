@@ -144,6 +144,40 @@ function hashRefreshToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+function decodeBase64UrlSegment(value: string): string | null {
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+    return Buffer.from(padded, "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+function parseSessionIdFromAccessToken(accessToken: string): string | null {
+  const parts = accessToken.split(".");
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const payloadSegment = parts[1];
+  const decodedPayload = decodeBase64UrlSegment(payloadSegment);
+  if (!decodedPayload) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(decodedPayload) as Record<string, unknown>;
+    const fromSessionId =
+      typeof payload.session_id === "string" ? payload.session_id : null;
+    const fromSid = typeof payload.sid === "string" ? payload.sid : null;
+    const normalized = normalizeSessionId(fromSessionId ?? fromSid);
+    return normalized;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const accessToken = parseAuthorizationHeader(request);
@@ -159,7 +193,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
     }
 
-    const sessionId = normalizeSessionId(payload.sessionId);
+    const sessionIdFromPayload = normalizeSessionId(payload.sessionId);
+    const sessionIdFromToken = parseSessionIdFromAccessToken(accessToken);
+    const sessionId = sessionIdFromPayload ?? sessionIdFromToken;
     const refreshToken = normalizeRefreshToken(payload.refreshToken);
     const refreshTokenHash = refreshToken
       ? hashRefreshToken(refreshToken)
@@ -251,19 +287,14 @@ export async function POST(request: NextRequest) {
           }
         });
 
-        let tokensToRevoke = refreshTokens.filter(
-          (token) => !tokenIdsToKeep.has(token.id),
-        );
+        if (refreshTokens.length > 0 && tokenIdsToKeep.size === 0) {
+          // Never revoke when we cannot confidently map the current session token.
+          revocationWarning =
+            "Unable to identify current refresh token reliably. Skipped token revocation to avoid logging out active session.";
+        }
 
-        if (
-          refreshTokens.length > 0 &&
-          tokensToRevoke.length === refreshTokens.length
-        ) {
-          // If we would revoke every token, keep the most recent one as a safety net.
-          const tokenToKeep =
-            refreshTokens.find((token) => token.current === true) ??
-            refreshTokens[0];
-          tokenIdsToKeep.add(tokenToKeep.id);
+        let tokensToRevoke: AdminRefreshToken[] = [];
+        if (!revocationWarning) {
           tokensToRevoke = refreshTokens.filter(
             (token) => !tokenIdsToKeep.has(token.id),
           );
