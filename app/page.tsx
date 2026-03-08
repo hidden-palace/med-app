@@ -14,6 +14,7 @@ import type { User, AuthChangeEvent } from "@supabase/supabase-js";
 import type { Profile } from "@/lib/supabase";
 
 const SESSION_FINGERPRINT_KEY = "uptoshift-active-session";
+const PENDING_SESSION_FINGERPRINT_KEY = "uptoshift-pending-session";
 
 function readSessionFingerprint(): string | null {
   if (typeof window === "undefined") {
@@ -44,6 +45,35 @@ function writeSessionFingerprint(value: string | null) {
   }
 }
 
+function readPendingSessionFingerprint(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return window.sessionStorage.getItem(PENDING_SESSION_FINGERPRINT_KEY);
+  } catch (error) {
+    console.warn("Unable to read pending session fingerprint:", error);
+    return null;
+  }
+}
+
+function writePendingSessionFingerprint(value: string | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    if (value) {
+      window.sessionStorage.setItem(PENDING_SESSION_FINGERPRINT_KEY, value);
+    } else {
+      window.sessionStorage.removeItem(PENDING_SESSION_FINGERPRINT_KEY);
+    }
+  } catch (error) {
+    console.warn("Unable to persist pending session fingerprint:", error);
+  }
+}
+
 type ActiveView = "dashboard" | "learning" | "validator" | "admin";
 
 export default function Home() {
@@ -59,6 +89,7 @@ export default function Home() {
   const adminStatusRef = useRef(false);
   const profileRef = useRef<Profile | null>(null);
   const currentSessionHashRef = useRef<string | null>(null);
+  const pendingSessionHashRef = useRef<string | null>(null);
   const lastSeenActiveHashRef = useRef<string | null>(null);
 
   const syncCurrentSessionHash = useCallback(() => {
@@ -68,7 +99,9 @@ export default function Home() {
     }
 
     const stored = readSessionFingerprint();
+    const pending = readPendingSessionFingerprint();
     currentSessionHashRef.current = stored;
+    pendingSessionHashRef.current = pending;
     if (stored) {
       lastSeenActiveHashRef.current = stored;
     }
@@ -86,14 +119,15 @@ export default function Home() {
     );
 
     currentSessionHashRef.current = null;
+    pendingSessionHashRef.current = null;
     writeSessionFingerprint(null);
+    writePendingSessionFingerprint(null);
     setProfile(null);
     profileRef.current = null;
     setIsAdmin(false);
     adminStatusRef.current = false;
     lastAdminCheckUserIdRef.current = null;
     adminCheckPromiseRef.current = null;
-    lastSeenActiveHashRef.current = null;
     lastSeenActiveHashRef.current = null;
 
     try {
@@ -124,7 +158,20 @@ export default function Home() {
 
       const localHash =
         currentSessionHashRef.current ?? syncCurrentSessionHash();
+      const pendingHash =
+        pendingSessionHashRef.current ?? readPendingSessionFingerprint();
       const lastSeen = lastSeenActiveHashRef.current;
+
+      if (pendingHash) {
+        if (pendingHash === serverHash) {
+          pendingSessionHashRef.current = null;
+          currentSessionHashRef.current = serverHash;
+          lastSeenActiveHashRef.current = serverHash;
+          writeSessionFingerprint(serverHash);
+          writePendingSessionFingerprint(null);
+        }
+        return;
+      }
 
       if (!localHash) {
         currentSessionHashRef.current = serverHash;
@@ -212,7 +259,20 @@ export default function Home() {
           if (typeof newSessionHash === "string" && newSessionHash.length > 0) {
             const localHash =
               currentSessionHashRef.current ?? syncCurrentSessionHash();
+            const pendingHash =
+              pendingSessionHashRef.current ?? readPendingSessionFingerprint();
             const lastSeen = lastSeenActiveHashRef.current;
+
+            if (pendingHash) {
+              if (pendingHash === newSessionHash) {
+                pendingSessionHashRef.current = null;
+                currentSessionHashRef.current = newSessionHash;
+                lastSeenActiveHashRef.current = newSessionHash;
+                writeSessionFingerprint(newSessionHash);
+                writePendingSessionFingerprint(null);
+              }
+              return;
+            }
 
             if (!localHash) {
               currentSessionHashRef.current = newSessionHash;
@@ -238,6 +298,8 @@ export default function Home() {
             lastSeenActiveHashRef.current = newSessionHash;
             writeSessionFingerprint(newSessionHash);
           } else {
+            pendingSessionHashRef.current = null;
+            writePendingSessionFingerprint(null);
             writeSessionFingerprint(null);
           }
 
@@ -275,6 +337,10 @@ export default function Home() {
         adminStatusRef.current = false;
         profileRef.current = null;
         lastAdminCheckUserIdRef.current = null;
+        currentSessionHashRef.current = null;
+        pendingSessionHashRef.current = null;
+        writeSessionFingerprint(null);
+        writePendingSessionFingerprint(null);
         return false;
       }
 
@@ -353,14 +419,23 @@ export default function Home() {
           profileRef.current = userProfile ?? null;
 
           const activeSessionHash = userProfile?.active_session_hash ?? null;
-          currentSessionHashRef.current = activeSessionHash;
-          if (activeSessionHash) {
-            lastSeenActiveHashRef.current = activeSessionHash;
-          }
+          const localHash =
+            currentSessionHashRef.current ?? syncCurrentSessionHash();
+          const pendingHash =
+            pendingSessionHashRef.current ?? readPendingSessionFingerprint();
 
-          if (activeSessionHash) {
+          if (activeSessionHash && pendingHash && activeSessionHash === pendingHash) {
+            pendingSessionHashRef.current = null;
+            currentSessionHashRef.current = activeSessionHash;
+            lastSeenActiveHashRef.current = activeSessionHash;
             writeSessionFingerprint(activeSessionHash);
-          } else {
+            writePendingSessionFingerprint(null);
+          } else if (!pendingHash && activeSessionHash && (!localHash || localHash === activeSessionHash)) {
+            currentSessionHashRef.current = activeSessionHash;
+            lastSeenActiveHashRef.current = activeSessionHash;
+            writeSessionFingerprint(activeSessionHash);
+          } else if (!pendingHash && !activeSessionHash) {
+            currentSessionHashRef.current = null;
             writeSessionFingerprint(null);
           }
 
@@ -427,6 +502,10 @@ export default function Home() {
           adminStatusRef.current = false;
           profileRef.current = null;
           lastAdminCheckUserIdRef.current = null;
+          currentSessionHashRef.current = null;
+          pendingSessionHashRef.current = null;
+          writeSessionFingerprint(null);
+          writePendingSessionFingerprint(null);
         }
       } catch (error) {
         console.error("Error initializing auth:", error);
@@ -437,6 +516,10 @@ export default function Home() {
           adminStatusRef.current = false;
           profileRef.current = null;
           lastAdminCheckUserIdRef.current = null;
+          currentSessionHashRef.current = null;
+          pendingSessionHashRef.current = null;
+          writeSessionFingerprint(null);
+          writePendingSessionFingerprint(null);
         }
       } finally {
         markAuthReady();
@@ -459,20 +542,35 @@ export default function Home() {
         return;
       }
 
-      syncCurrentSessionHash();
+      const currentHash = syncCurrentSessionHash();
 
       const currentUser = session?.user ?? null;
-      setUser(currentUser);
-
-      if (!currentUser) {
+      if (event === "SIGNED_OUT") {
+        setUser(null);
         setProfile(null);
         profileRef.current = null;
         setIsAdmin(false);
         adminStatusRef.current = false;
         lastAdminCheckUserIdRef.current = null;
         adminCheckPromiseRef.current = null;
+        currentSessionHashRef.current = null;
+        pendingSessionHashRef.current = null;
+        lastSeenActiveHashRef.current = null;
+        writeSessionFingerprint(null);
+        writePendingSessionFingerprint(null);
         markAuthReady();
         return;
+      }
+
+      if (!currentUser) {
+        markAuthReady();
+        return;
+      }
+
+      setUser(currentUser);
+
+      if (event === "SIGNED_IN" && currentHash) {
+        lastSeenActiveHashRef.current = currentHash;
       }
 
       markAuthReady();
@@ -510,6 +608,8 @@ export default function Home() {
 
   const handleLogout = useCallback(async () => {
     currentSessionHashRef.current = null;
+    pendingSessionHashRef.current = null;
+    writePendingSessionFingerprint(null);
     writeSessionFingerprint(null);
     setUser(null);
     setProfile(null);

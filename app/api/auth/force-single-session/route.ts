@@ -126,111 +126,107 @@ export async function POST(request: NextRequest) {
     }
 
     if (!serviceRoleKey) {
-      console.warn(
-        "force-single-session: SUPABASE_SERVICE_ROLE_KEY is not configured. Skipping refresh token revocation.",
+      return NextResponse.json(
+        {
+          error:
+            "Single-session enforcement is unavailable. SUPABASE_SERVICE_ROLE_KEY is missing.",
+        },
+        { status: 503 },
       );
-    } else {
-      const adminHeaders = {
-        apikey: serviceRoleKey,
-        Authorization: `Bearer ${serviceRoleKey}`,
-        "Content-Type": "application/json",
-      };
+    }
 
-      try {
-        const refreshTokensResponse = await fetch(
-          `${supabaseUrl}/auth/v1/admin/users/${payload.userId}/refresh_tokens`,
+    const adminHeaders = {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      "Content-Type": "application/json",
+    };
+
+    const refreshTokensResponse = await fetch(
+      `${supabaseUrl}/auth/v1/admin/users/${payload.userId}/refresh_tokens`,
+      {
+        headers: adminHeaders,
+        cache: "no-store",
+      },
+    );
+
+    if (refreshTokensResponse.status === 404) {
+      throw new Error(
+        "Supabase refresh token admin endpoint is unavailable (404).",
+      );
+    }
+
+    if (!refreshTokensResponse.ok) {
+      const message = await refreshTokensResponse.text();
+      throw new Error(
+        `Failed to load refresh tokens: ${refreshTokensResponse.status} ${message}`,
+      );
+    }
+
+    const refreshTokens =
+      (await refreshTokensResponse.json()) as AdminRefreshToken[];
+
+    const tokenIdsToKeep = new Set<string>();
+
+    refreshTokens.forEach((token) => {
+      const matchesSessionId =
+        sessionId && token.session_id && token.session_id === sessionId;
+      const matchesHash =
+        refreshTokenHash && token.token && token.token === refreshTokenHash;
+      const matchesRawToken =
+        refreshToken && token.token && token.token === refreshToken;
+
+      if (
+        matchesSessionId ||
+        matchesHash ||
+        matchesRawToken ||
+        token.current === true
+      ) {
+        tokenIdsToKeep.add(token.id);
+      }
+    });
+
+    let tokensToRevoke = refreshTokens.filter(
+      (token) => !tokenIdsToKeep.has(token.id),
+    );
+
+    if (
+      refreshTokens.length > 0 &&
+      tokensToRevoke.length === refreshTokens.length
+    ) {
+      // If we would revoke every token, keep the most recent one as a safety net.
+      const tokenToKeep =
+        refreshTokens.find((token) => token.current === true) ??
+        refreshTokens[0];
+      tokenIdsToKeep.add(tokenToKeep.id);
+      tokensToRevoke = refreshTokens.filter(
+        (token) => !tokenIdsToKeep.has(token.id),
+      );
+    }
+
+    await Promise.all(
+      tokensToRevoke.map(async (token) => {
+        const revokeResponse = await fetch(
+          `${supabaseUrl}/auth/v1/admin/users/${payload.userId}/refresh_tokens/${encodeURIComponent(token.id)}`,
           {
+            method: "DELETE",
             headers: adminHeaders,
-            cache: "no-store",
           },
         );
 
-        if (refreshTokensResponse.status === 404) {
-          console.warn(
-            "force-single-session: refresh token endpoint returned 404, skipping token revocation step.",
-          );
-        } else if (!refreshTokensResponse.ok) {
-          const message = await refreshTokensResponse.text();
+        if (revokeResponse.status === 404) {
           throw new Error(
-            `Failed to load refresh tokens: ${refreshTokensResponse.status} ${message}`,
-          );
-        } else {
-          const refreshTokens =
-            (await refreshTokensResponse.json()) as AdminRefreshToken[];
-
-          const tokenIdsToKeep = new Set<string>();
-
-          refreshTokens.forEach((token) => {
-            const matchesSessionId =
-              sessionId && token.session_id && token.session_id === sessionId;
-            const matchesHash =
-              refreshTokenHash &&
-              token.token &&
-              token.token === refreshTokenHash;
-            const matchesRawToken =
-              refreshToken && token.token && token.token === refreshToken;
-
-            if (
-              matchesSessionId ||
-              matchesHash ||
-              matchesRawToken ||
-              token.current === true
-            ) {
-              tokenIdsToKeep.add(token.id);
-            }
-          });
-
-          let tokensToRevoke = refreshTokens.filter(
-            (token) => !tokenIdsToKeep.has(token.id),
-          );
-
-          if (
-            refreshTokens.length > 0 &&
-            tokensToRevoke.length === refreshTokens.length
-          ) {
-            // If we would revoke every token, keep the most recent one as a safety net.
-            const tokenToKeep =
-              refreshTokens.find((token) => token.current === true) ??
-              refreshTokens[0];
-            tokenIdsToKeep.add(tokenToKeep.id);
-            tokensToRevoke = refreshTokens.filter(
-              (token) => !tokenIdsToKeep.has(token.id),
-            );
-          }
-
-          await Promise.all(
-            tokensToRevoke.map(async (token) => {
-              const revokeResponse = await fetch(
-                `${supabaseUrl}/auth/v1/admin/users/${payload.userId}/refresh_tokens/${encodeURIComponent(token.id)}`,
-                {
-                  method: "DELETE",
-                  headers: adminHeaders,
-                },
-              );
-
-              if (revokeResponse.status === 404) {
-                console.warn(
-                  `force-single-session: refresh token ${token.id} not found when revoking, skipping.`,
-                );
-                return;
-              }
-
-              if (!revokeResponse.ok) {
-                const message = await revokeResponse.text();
-                throw new Error(
-                  `Failed to revoke refresh token ${token.session_id ?? "[unknown session]"}: ${revokeResponse.status} ${message}`,
-                );
-              }
-            }),
+            `Refresh token ${token.id} could not be revoked (404).`,
           );
         }
-      } catch (tokenError) {
-        console.warn(
-          "force-single-session: token revocation failed and was skipped",
-          tokenError,
-        );
-      }
-    }
+
+        if (!revokeResponse.ok) {
+          const message = await revokeResponse.text();
+          throw new Error(
+            `Failed to revoke refresh token ${token.session_id ?? "[unknown session]"}: ${revokeResponse.status} ${message}`,
+          );
+        }
+      }),
+    );
 
     const sessionFingerprint =
       typeof payload.sessionFingerprint === "string" &&
@@ -238,14 +234,12 @@ export async function POST(request: NextRequest) {
         ? payload.sessionFingerprint.trim()
         : randomUUID();
 
-    const supabaseProfileClient = serviceRoleKey
-      ? createClient(supabaseUrl, serviceRoleKey, {
-          auth: {
-            persistSession: false,
-            autoRefreshToken: false,
-          },
-        })
-      : supabaseUserClient;
+    const supabaseProfileClient = createClient(supabaseUrl, serviceRoleKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
 
     const { error: updateError } = await supabaseProfileClient
       .from("profiles")

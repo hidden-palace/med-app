@@ -21,6 +21,7 @@ import { supabase } from "@/lib/supabase";
 import type { AuthError } from "@supabase/supabase-js";
 
 const SESSION_FINGERPRINT_KEY = "uptoshift-active-session";
+const PENDING_SESSION_FINGERPRINT_KEY = "uptoshift-pending-session";
 
 function writeSessionFingerprint(value: string | null) {
   if (typeof window === "undefined") {
@@ -35,6 +36,22 @@ function writeSessionFingerprint(value: string | null) {
     }
   } catch (error) {
     console.warn("Unable to persist session fingerprint:", error);
+  }
+}
+
+function writePendingSessionFingerprint(value: string | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    if (value) {
+      window.sessionStorage.setItem(PENDING_SESSION_FINGERPRINT_KEY, value);
+    } else {
+      window.sessionStorage.removeItem(PENDING_SESSION_FINGERPRINT_KEY);
+    }
+  } catch (error) {
+    console.warn("Unable to persist pending session fingerprint:", error);
   }
 }
 
@@ -154,15 +171,22 @@ export function AuthForm({
             );
           }
 
-          writeSessionFingerprint(sessionFingerprint);
+          writeSessionFingerprint(null);
+          writePendingSessionFingerprint(sessionFingerprint);
         } catch (enforceError) {
           console.error("Failed to enforce single session:", enforceError);
+          writePendingSessionFingerprint(null);
           writeSessionFingerprint(null);
+          await supabase.auth.signOut();
+          throw new Error(
+            "Unable to secure your session right now. Please try signing in again.",
+          );
         }
       }
 
       setSuccess("Successfully signed in!");
     } catch (error) {
+      writePendingSessionFingerprint(null);
       writeSessionFingerprint(null);
       const authError = error as AuthError;
       setError(authError.message || "An error occurred during sign in");
